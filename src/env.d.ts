@@ -3,6 +3,8 @@ import type {
   CodexEvent,
   CodexPromptResult,
   CodexThreadSnapshot,
+  CodexUsageSnapshot,
+  DeepSeekBillingSnapshot,
   DownlinkFrame,
   PluginControlSnapshot,
   PluginToggleResult,
@@ -27,17 +29,24 @@ interface DeepSeekDesktopBridge {
   openSessionWindow: (sessionId: string) => Promise<void>
   respond: (rpcId: string, result: unknown) => Promise<{ accepted: boolean; reason?: string }>
   exportSession: (sessionId: string, includeDescendants: boolean) => Promise<SessionExportResult>
-  codexCatalog: () => Promise<CodexCatalog>
+  codexCatalog: (refresh?: boolean) => Promise<CodexCatalog>
+  codexUsage: () => Promise<CodexUsageSnapshot>
+  deepSeekBilling: () => Promise<DeepSeekBillingSnapshot>
+  setDeepSeekBillingKey: (value: string) => Promise<DeepSeekBillingSnapshot>
+  removeDeepSeekBillingKey: () => Promise<DeepSeekBillingSnapshot>
   codexPrompt: (payload: {
     sessionId: string
     threadId?: string
     cwd: string
     model: string
     effort: string
+    permission: string
     prompt: string
+    context?: import('./lib/types.ts').ProviderHandoffMessage[]
   }) => Promise<CodexPromptResult>
   codexReadThread: (threadId: string) => Promise<CodexThreadSnapshot>
   codexInterrupt: (threadId: string, turnId: string) => Promise<void>
+  codexRespondApproval: (requestId: string | number, approved: boolean) => Promise<void>
   connectionState: () => Promise<DesktopConnectionState>
   onDownlink: (listener: (frame: DownlinkFrame) => void) => () => void
   onConnectionState: (listener: (state: DesktopConnectionState) => void) => () => void

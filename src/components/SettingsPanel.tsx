@@ -4,13 +4,14 @@ import { WhaleLogo } from './WhaleLogo.tsx'
 import { AgentPresetsSettings } from './AgentPresetsSettings.tsx'
 import { HarnessSettings } from './HarnessSettings.tsx'
 import { ModelsCredentialsSettings } from './ModelsCredentialsSettings.tsx'
+import { UsageBillingSettings } from './UsageBillingSettings.tsx'
 import type { HostDescription, PermissionOption, PluginControlSnapshot, SessionModels } from '../lib/types.ts'
 
 export type ThemeMode = 'system' | 'light' | 'dark'
 export type InterfaceDensity = 'comfortable' | 'compact'
 export type LocalFontStatus = 'checking' | 'pair' | 'sans' | 'fallback'
 
-type SettingsSection = 'general' | 'appearance' | 'model' | 'providers' | 'presets' | 'plugins' | 'harness' | 'host' | 'shortcuts' | 'about'
+type SettingsSection = 'general' | 'appearance' | 'model' | 'usage' | 'providers' | 'presets' | 'plugins' | 'harness' | 'host' | 'shortcuts' | 'about'
 
 interface SettingsPanelProps {
   open: boolean
@@ -55,6 +56,7 @@ const sections: Array<{ id: SettingsSection; label: string; icon: IconName | 'wh
   { id: 'general', label: 'General', icon: 'settings' },
   { id: 'appearance', label: 'Appearance', icon: 'sun' },
   { id: 'model', label: 'Model & permissions', icon: 'brain' },
+  { id: 'usage', label: 'Usage & billing', icon: 'activity' },
   { id: 'providers', label: 'Models & credentials', icon: 'key' },
   { id: 'presets', label: 'Agent presets', icon: 'agent' },
   { id: 'plugins', label: 'Plugins', icon: 'plug' },
@@ -287,15 +289,23 @@ export function SettingsPanel({
                         <label className="settings-select"><select value={models.current.reasoningEffort ?? currentModel?.reasoning?.defaultEffort ?? ''} disabled={busy} onChange={event => onEffort(event.target.value)}>{efforts.map(effort => <option value={effort.id} key={effort.id}>{effort.name}</option>)}</select><Icon name="chevron-down" size={12} /></label>
                       )}
                     </Row>
-                    <Row title="Permission mode" detail="Full access always asks for confirmation before applying.">
+                    <Row title="Permission mode" detail="Controls approval routing and sandbox access for the selected provider.">
                       {permission === undefined || permissionOptions.length === 0 ? <span className="settings-unavailable">Unavailable</span> : (
-                        <label className="settings-select"><select value={permission} disabled={busy || running} onChange={event => onPermission(event.target.value)}>{permissionOptions.map(option => <option value={option.value} key={option.value}>{option.name}</option>)}</select><Icon name="chevron-down" size={12} /></label>
+                        <label className="settings-select"><select value={permission} disabled={busy} onChange={event => onPermission(event.target.value)}>{permissionOptions.map(option => <option value={option.value} key={option.value}>{option.name}</option>)}</select><Icon name="chevron-down" size={12} /></label>
                       )}
                     </Row>
                   </div>
                 )}
+                {models?.failures.map(failure => (
+                  <div className="settings-note model-failure-note" key={failure.id}><Icon name="activity" size={14} /><span><strong>{failure.name}</strong> · {failure.message}</span></div>
+                ))}
+                {running && <div className="settings-note"><Icon name="activity" size={14} /><span>Changes are saved now and apply from the next model step or turn.</span></div>}
                 <div className="settings-note"><Icon name="lock" size={14} /><span>Settings do not add permissions beyond the options exposed by the selected Harness session.</span></div>
               </section>
+            )}
+
+            {section === 'usage' && (
+              <UsageBillingSettings active={open && section === 'usage'} />
             )}
 
             {section === 'plugins' && (

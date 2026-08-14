@@ -52,11 +52,14 @@ export function Composer({
 }: ComposerProps) {
   const composing = useRef(false)
   const fileInput = useRef<HTMLInputElement>(null)
+  const textarea = useRef<HTMLTextAreaElement>(null)
   const currentModel = models?.groups
     .flatMap(group => group.models.map(model => ({ ...model, provider: group.id })))
     .find(model => model.provider === models.current.provider && model.id === models.current.model)
   const efforts = currentModel?.reasoning?.efforts ?? []
-  const canSend = !disabled && !busy && (value.trim() !== '' || attachments.length > 0)
+  const hasContent = value.trim() !== '' || attachments.length > 0
+  const sendLocked = disabled || busy
+  const canSend = !sendLocked && hasContent
   const assistantName = models?.current.provider === 'codex-cli' ? 'Codex' : 'DeepSeek'
 
   return (
@@ -74,6 +77,7 @@ export function Composer({
       >
         <input ref={fileInput} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={event => { onAddFiles(Array.from(event.target.files ?? [])); event.target.value = '' }} />
         <textarea
+          ref={textarea}
           value={value}
           onChange={event => onChange(event.target.value)}
           onCompositionStart={() => { composing.current = true }}
@@ -116,7 +120,7 @@ export function Composer({
               <Icon name="paperclip" size={16} />
             </button>
             {models !== undefined && (
-              <label className="composer-select model-select" title="Model">
+              <label className="composer-select model-select" title={running ? 'Model · applies from the next model step or turn' : 'Model'}>
                 <select
                   value={`${models.current.provider}::${models.current.model}`}
                   onChange={event => {
@@ -138,7 +142,7 @@ export function Composer({
               </label>
             )}
             {efforts.length > 0 && (
-              <label className="composer-select" title="Reasoning effort">
+              <label className="composer-select" title={running ? 'Reasoning effort · applies from the next model step or turn' : 'Reasoning effort'}>
                 <Icon name="brain" size={14} />
                 <select
                   value={models?.current.reasoningEffort ?? currentModel?.reasoning?.defaultEffort ?? ''}
@@ -152,11 +156,11 @@ export function Composer({
               </label>
             )}
             {permissionOptions.length > 0 && permission !== undefined && (
-              <label className="composer-select" title="Permission preset">
+              <label className="composer-select" title={running ? 'Permission preset · applies from the next approval boundary or turn' : 'Permission preset'}>
                 <select
                   value={permission}
                   onChange={event => onPermission(event.target.value)}
-                  disabled={busy || running}
+                  disabled={busy}
                   aria-label="Permission preset"
                 >
                   {permissionOptions.map(option => <option value={option.value} key={option.value}>{option.name}</option>)}
@@ -170,13 +174,24 @@ export function Composer({
               <Icon name="stop" size={14} />
             </button>
           ) : (
-            <button type="button" className="send-button" onClick={onSend} disabled={!canSend} aria-label="Send">
+            <button
+              type="button"
+              className="send-button"
+              onClick={() => {
+                if (canSend) onSend()
+                else textarea.current?.focus()
+              }}
+              disabled={sendLocked}
+              data-empty={!hasContent}
+              aria-label={hasContent ? 'Send' : 'Focus message input'}
+              title={hasContent ? 'Send' : 'Type a message to send'}
+            >
               <Icon name="send" size={15} />
             </button>
           )}
         </div>
       </div>
-      <p className="composer-hint">Enter to send · Shift + Enter for a new line</p>
+      <p className="composer-hint">{hasContent ? 'Enter to send' : 'Type a message to begin'} · Shift + Enter for a new line</p>
     </div>
   )
 }

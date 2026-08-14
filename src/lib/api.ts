@@ -6,8 +6,10 @@ import type {
   CodexEvent,
   CodexPromptResult,
   CodexThreadSnapshot,
+  CodexUsageSnapshot,
   ConfigurableProviderView,
   CredentialView,
+  DeepSeekBillingSnapshot,
   DiscoveredModelView,
   DownlinkFrame,
   HistoryPage,
@@ -336,21 +338,32 @@ export const harnessApi = {
 }
 
 export const codexApi = {
-  catalog: (): Promise<CodexCatalog> => window.dshDesktop === undefined
+  catalog: (refresh = false): Promise<CodexCatalog> => window.dshDesktop === undefined
     ? Promise.resolve({
         available: false,
         authenticatedWith: 'ChatGPT',
         models: [],
         error: 'Codex CLI integration is available in the packaged desktop app.',
       })
-    : window.dshDesktop.codexCatalog(),
+    : window.dshDesktop.codexCatalog(refresh),
+  usage: (): Promise<CodexUsageSnapshot> => window.dshDesktop === undefined
+    ? Promise.resolve({
+        available: false,
+        rateLimits: [],
+        dailyUsageBuckets: [],
+        updatedAt: Date.now(),
+        error: 'Codex usage is available in the packaged desktop app.',
+      })
+    : window.dshDesktop.codexUsage(),
   prompt: (payload: {
     sessionId: string
     threadId?: string
     cwd: string
     model: string
     effort: string
+    permission: string
     prompt: string
+    context?: import('./types.ts').ProviderHandoffMessage[]
   }): Promise<CodexPromptResult> => {
     if (window.dshDesktop === undefined) return Promise.reject(new Error('Codex CLI requires the desktop app'))
     return window.dshDesktop.codexPrompt(payload)
@@ -362,6 +375,30 @@ export const codexApi = {
   interrupt: (threadId: string, turnId: string): Promise<void> => {
     if (window.dshDesktop === undefined) return Promise.reject(new Error('Codex CLI requires the desktop app'))
     return window.dshDesktop.codexInterrupt(threadId, turnId)
+  },
+  respondApproval: (requestId: string | number, approved: boolean): Promise<void> => {
+    if (window.dshDesktop === undefined) return Promise.reject(new Error('Codex CLI requires the desktop app'))
+    return window.dshDesktop.codexRespondApproval(requestId, approved)
+  },
+}
+
+export const billingApi = {
+  deepSeek: (): Promise<DeepSeekBillingSnapshot> => window.dshDesktop === undefined
+    ? Promise.resolve({
+        configured: false,
+        writable: false,
+        balances: [],
+        updatedAt: Date.now(),
+        error: 'Secure billing credentials are available in the packaged desktop app.',
+      })
+    : window.dshDesktop.deepSeekBilling(),
+  setDeepSeekKey: (value: string): Promise<DeepSeekBillingSnapshot> => {
+    if (window.dshDesktop === undefined) return Promise.reject(new Error('Secure billing credentials require the desktop app'))
+    return window.dshDesktop.setDeepSeekBillingKey(value)
+  },
+  removeDeepSeekKey: (): Promise<DeepSeekBillingSnapshot> => {
+    if (window.dshDesktop === undefined) return Promise.reject(new Error('Secure billing credentials require the desktop app'))
+    return window.dshDesktop.removeDeepSeekBillingKey()
   },
 }
 

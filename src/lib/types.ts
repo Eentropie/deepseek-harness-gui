@@ -242,6 +242,8 @@ export interface ApprovalRequest {
   toolName: string
   callId?: string
   reason?: string
+  source?: 'host' | 'codex'
+  codexRequestId?: string | number
 }
 
 export interface QuestionOption {
@@ -281,12 +283,16 @@ export interface SessionModels {
   failures: Array<{ id: string; name: string; message: string }>
 }
 
-export type MessageBlock =
+export type ProcessBlock =
   | { kind: 'text'; text: string }
   | { kind: 'reasoning'; text: string }
   | { kind: 'tool'; name: string; arguments: string; callId?: string }
   | { kind: 'image'; label: string; attachmentId?: string; mediaType?: ImageMediaType; src?: string; name?: string }
   | { kind: 'other'; value: unknown }
+
+export type MessageBlock =
+  | ProcessBlock
+  | { kind: 'thought'; blocks: ProcessBlock[] }
 
 export interface ConversationMessage {
   id: string
@@ -296,6 +302,8 @@ export interface ConversationMessage {
   blocks: MessageBlock[]
   agent?: 'DeepSeek' | 'Codex'
   streaming?: boolean
+  streamAssistantItemId?: string
+  streamReasoningItemId?: string
   usage?: unknown
 }
 
@@ -321,12 +329,94 @@ export interface CodexPromptResult {
   turnId: string
 }
 
+export interface ProviderHandoffMessage {
+  role: 'user' | 'assistant'
+  text: string
+  seq: number
+}
+
+export type CodexPermissionMode = 'ask-for-approval' | 'approve-for-me' | 'full-access'
+
 export interface CodexThreadSnapshot {
   threadId: string
   messages: ConversationMessage[]
 }
 
+export interface CodexRateLimitWindow {
+  usedPercent: number
+  remainingPercent: number
+  windowDurationMins?: number
+  resetsAt?: number
+}
+
+export interface CodexRateLimitBucket {
+  id: string
+  name: string
+  planType?: string
+  primary?: CodexRateLimitWindow
+  secondary?: CodexRateLimitWindow
+  credits?: {
+    balance?: string
+    hasCredits: boolean
+    unlimited: boolean
+  }
+  individualLimit?: {
+    limit: string
+    used: string
+    remainingPercent: number
+    resetsAt: number
+  }
+  spendControlReached?: boolean
+  reachedType?: string
+}
+
+export interface CodexUsageSnapshot {
+  available: boolean
+  accountType?: 'chatgpt' | 'apiKey' | 'amazonBedrock'
+  planType?: string
+  rateLimits: CodexRateLimitBucket[]
+  dailyUsageBuckets: Array<{ startDate: string; tokens: number }>
+  summary?: {
+    lifetimeTokens?: number
+    currentStreakDays?: number
+    longestStreakDays?: number
+    peakDailyTokens?: number
+    longestRunningTurnSec?: number
+  }
+  updatedAt: number
+  error?: string
+}
+
+export interface DeepSeekBalanceInfo {
+  currency: string
+  totalBalance: string
+  grantedBalance: string
+  toppedUpBalance: string
+}
+
+export interface DeepSeekBillingSnapshot {
+  configured: boolean
+  source?: 'environment' | 'secure-storage'
+  writable: boolean
+  balanceAvailable?: boolean
+  balances: DeepSeekBalanceInfo[]
+  updatedAt: number
+  error?: string
+}
+
 export type CodexEvent =
+  | {
+    type: 'usage-updated'
+  }
+  | {
+    type: 'approval-requested'
+    requestId: string | number
+    sessionId?: string
+    threadId?: string
+    turnId?: string
+    toolName: string
+    reason?: string
+  }
   | {
     type: 'turn-started'
     sessionId?: string

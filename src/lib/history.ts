@@ -1,11 +1,15 @@
 import type {
   ConversationMessage,
   DshEvent,
+  DownlinkFrame,
   HistoryEntry,
+  HistoryPage,
   MessageBlock,
   ImageMediaType,
   QueueItem,
 } from './types.ts'
+import { visibleProviderBlocks } from './provider-handoff.ts'
+import { composeTurnBlocks } from './thought-process.ts'
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null ? value as Record<string, unknown> : undefined
@@ -54,7 +58,9 @@ function blockFromContent(value: unknown): MessageBlock {
 }
 
 function contentBlocks(value: unknown): MessageBlock[] {
-  return Array.isArray(value) ? value.map(blockFromContent) : []
+  return Array.isArray(value)
+    ? visibleProviderBlocks(value.map(blockFromContent))
+    : []
 }
 
 interface PartialStep {
@@ -63,6 +69,14 @@ interface PartialStep {
   seq: number
   time: number
   blocks: Array<MessageBlock | undefined>
+}
+
+interface AssistantStep {
+  step: number
+  seq: number
+  time: number
+  blocks: MessageBlock[]
+  usage?: unknown
 }
 
 function applyChunk(step: PartialStep, chunkValue: unknown): void {
@@ -103,33 +117,63 @@ function stepKey(turn: number, step: number): string {
   return `${turn}:${step}`
 }
 
-/** Convert the public history wire events into the small transcript this GUI owns. */
-export function projectConversation(entries: HistoryEntry[]): ConversationMessage[] {
-  const messages: ConversationMessage[] = []
-  const partials = new Map<string, PartialStep>()
-  const finalized = new Set<string>()
+/** Incrementally project an append-only history tail without rescanning settled events. */
+export class ConversationProjector {
+  private entries: HistoryEntry[] = []
+  private messages: ConversationMessage[] = []
+  private readonly partials = new Map<string, PartialStep>()
+  private readonly finalized = new Set<string>()
+  private readonly turns = new Map<number, Map<number, AssistantStep>>()
+  private readonly turnIndexes = new Map<number, number>()
+  private snapshotCache: ConversationMessage[] = []
+  private dirty = true
 
-  for (const { event } of entries) {
+  sync(entries: HistoryEntry[]): ConversationMessage[] {
+    const appendOnly = this.entries.length <= entries.length
+      && this.entries.every((entry, index) => entry.event.seq === entries[index]?.event.seq)
+    if (!appendOnly) this.reset()
+    const start = this.entries.length
+    this.entries = entries
+    for (let index = start; index < entries.length; index += 1) {
+      const entry = entries[index]
+      if (entry !== undefined) this.ingest(entry.event)
+    }
+    return this.snapshot()
+  }
+
+  private reset(): void {
+    this.entries = []
+    this.messages = []
+    this.partials.clear()
+    this.finalized.clear()
+    this.turns.clear()
+    this.turnIndexes.clear()
+    this.snapshotCache = []
+    this.dirty = true
+  }
+
+  private ingest(event: DshEvent): void {
     if (event.type === 'user/message') {
       const source = record(event.data['source'])
       const sourceKind = string(source?.['kind'])
-      if (sourceKind !== 'user' && sourceKind !== 'steering') continue
-      messages.push({
+      if (sourceKind !== 'user' && sourceKind !== 'steering') return
+      this.messages.push({
         id: string(event.data['id']) ?? `user-${event.seq}`,
         seq: event.seq,
         time: event.time,
         role: 'user',
         blocks: contentBlocks(event.data['content']),
       })
-      continue
+      this.dirty = true
+      return
     }
 
     if (event.type === 'assistant/chunk') {
       const turn = number(event.data['turn'])
       const step = number(event.data['step'])
-      if (turn === undefined || step === undefined) continue
+      if (turn === undefined || step === undefined) return
       const key = stepKey(turn, step)
-      const partial = partials.get(key) ?? {
+      const partial = this.partials.get(key) ?? {
         turn,
         step,
         seq: event.seq,
@@ -137,42 +181,194 @@ export function projectConversation(entries: HistoryEntry[]): ConversationMessag
         blocks: [],
       }
       applyChunk(partial, event.data['chunk'])
-      partials.set(key, partial)
-      continue
+      this.partials.set(key, partial)
+      this.dirty = true
+      return
     }
 
     if (event.type === 'assistant/message') {
       const turn = number(event.data['turn'])
       const step = number(event.data['step'])
       const message = record(event.data['message'])
-      if (turn === undefined || step === undefined || message === undefined) continue
-      finalized.add(stepKey(turn, step))
-      messages.push({
-        id: string(message['id']) ?? `assistant-${event.seq}`,
+      if (turn === undefined || step === undefined || message === undefined) return
+      this.finalized.add(stepKey(turn, step))
+      const steps = this.turns.get(turn) ?? new Map<number, AssistantStep>()
+      steps.set(step, {
+        step,
         seq: event.seq,
         time: event.time,
-        role: 'assistant',
         blocks: contentBlocks(message['content']),
         ...(event.data['usage'] === undefined ? {} : { usage: event.data['usage'] }),
       })
+      this.turns.set(turn, steps)
+      const projected = this.projectTurn(turn, [...steps.values()])
+      const index = this.turnIndexes.get(turn)
+      if (index === undefined) {
+        this.turnIndexes.set(turn, this.messages.length)
+        this.messages.push(projected)
+      } else {
+        this.messages[index] = projected
+      }
+      this.dirty = true
     }
   }
 
-  for (const [key, partial] of partials) {
-    if (finalized.has(key)) continue
-    const blocks = partial.blocks.filter((block): block is MessageBlock => block !== undefined)
-    if (!blocks.some(block => block.kind === 'tool' || (block.kind !== 'other' && 'text' in block && block.text !== ''))) continue
-    messages.push({
-      id: `partial-${key}`,
-      seq: partial.seq,
-      time: partial.time,
+  private projectTurn(turn: number, steps: AssistantStep[], streaming = false): ConversationMessage {
+    const ordered = steps.sort((left, right) => left.step - right.step || left.seq - right.seq)
+    const tail = ordered.at(-1)
+    return {
+      id: `assistant-turn-${turn}`,
+      seq: tail?.seq ?? 0,
+      time: tail?.time ?? 0,
       role: 'assistant',
-      blocks,
-      streaming: true,
-    })
+      blocks: composeTurnBlocks(ordered.map(item => item.blocks)),
+      ...(streaming ? { streaming: true } : {}),
+      ...(tail?.usage === undefined ? {} : { usage: tail.usage }),
+    }
   }
 
-  return messages.sort((left, right) => left.seq - right.seq)
+  private snapshot(): ConversationMessage[] {
+    if (!this.dirty) return this.snapshotCache
+    const messages = [...this.messages]
+    const partialTurns = new Map<number, AssistantStep[]>()
+    for (const [key, partial] of this.partials) {
+      if (this.finalized.has(key)) continue
+      const blocks = partial.blocks.filter((block): block is MessageBlock => block !== undefined)
+      if (!blocks.some(block => block.kind === 'tool' || (block.kind !== 'other' && 'text' in block && block.text !== ''))) continue
+      const steps = partialTurns.get(partial.turn) ?? [...(this.turns.get(partial.turn)?.values() ?? [])]
+      steps.push({ step: partial.step, seq: partial.seq, time: partial.time, blocks })
+      partialTurns.set(partial.turn, steps)
+    }
+    for (const [turn, steps] of partialTurns) {
+      const projected = this.projectTurn(turn, steps, true)
+      const index = this.turnIndexes.get(turn)
+      if (index === undefined) messages.push(projected)
+      else messages[index] = projected
+    }
+    this.snapshotCache = messages.sort((left, right) => left.seq - right.seq)
+    this.dirty = false
+    return this.snapshotCache
+  }
+}
+
+/** Convert the public history wire events into the small transcript this GUI owns. */
+export function projectConversation(entries: HistoryEntry[]): ConversationMessage[] {
+  return new ConversationProjector().sync(entries)
+}
+
+/** Merge an authoritative tail pull with already-loaded older pages and live events. */
+export function mergeHistoryTail(current: HistoryPage, tail: HistoryPage): HistoryPage {
+  if (current.events.length === 0) return tail
+  const bySeq = new Map<number, HistoryEntry>()
+  current.events.forEach(entry => bySeq.set(entry.event.seq, entry))
+  tail.events.forEach(entry => {
+    if (!bySeq.has(entry.event.seq)) bySeq.set(entry.event.seq, entry)
+  })
+  const currentFirst = current.events[0]?.event.seq
+  const tailFirst = tail.events[0]?.event.seq
+  const keptOlderWindow = currentFirst !== undefined && tailFirst !== undefined && currentFirst < tailFirst
+  return {
+    events: [...bySeq.values()].sort((left, right) => left.event.seq - right.event.seq),
+    hasMore: keptOlderWindow ? current.hasMore : tail.hasMore,
+    ...(tail.projections === undefined
+      ? current.projections === undefined ? {} : { projections: current.projections }
+      : { projections: tail.projections }),
+  }
+}
+
+export interface LiveHistoryAppend {
+  page: HistoryPage
+  appended: number
+  gap: boolean
+}
+
+/** Append ordered mux events by seq; any gap asks the caller for one tail repair. */
+export function appendLiveHistory(current: HistoryPage, incoming: readonly HistoryEntry[]): LiveHistoryAppend {
+  if (incoming.length === 0) return { page: current, appended: 0, gap: false }
+  const events = [...incoming].sort((left, right) => left.event.seq - right.event.seq)
+  let tailSeq = current.events.at(-1)?.event.seq
+  const appended: HistoryEntry[] = []
+  for (const entry of events) {
+    const seq = entry.event.seq
+    if (tailSeq === undefined) {
+      if (seq !== 0) return { page: current, appended: 0, gap: true }
+      appended.push(entry)
+      tailSeq = seq
+      continue
+    }
+    if (seq <= tailSeq) continue
+    if (seq !== tailSeq + 1) {
+      return {
+        page: appended.length === 0 ? current : { ...current, events: [...current.events, ...appended] },
+        appended: appended.length,
+        gap: true,
+      }
+    }
+    appended.push(entry)
+    tailSeq = seq
+  }
+  return appended.length === 0
+    ? { page: current, appended: 0, gap: false }
+    : { page: { ...current, events: [...current.events, ...appended] }, appended: appended.length, gap: false }
+}
+
+/** Parse the durable event carried by a Host mux frame. */
+export function liveHistoryEntry(frame: DownlinkFrame): HistoryEntry | undefined {
+  if (frame.type !== 'session/event') return undefined
+  const event = record(frame['event'])
+  const type = string(event?.['type'])
+  const seq = number(event?.['seq'])
+  const time = number(event?.['time'])
+  const data = record(event?.['data'])
+  if (type === undefined || seq === undefined || time === undefined || data === undefined) return undefined
+  return {
+    event: {
+      type,
+      seq,
+      time,
+      data,
+      ...(typeof event?.['surfaceOp'] === 'string' ? { surfaceOp: event['surfaceOp'] } : {}),
+      ...(Array.isArray(event?.['sourceEventSeqs'])
+        ? { sourceEventSeqs: event['sourceEventSeqs'].filter((value): value is number => typeof value === 'number') }
+        : {}),
+    },
+    ...(frame['view'] === undefined ? {} : { view: frame['view'] }),
+  }
+}
+
+/** Update one live projection only after a tail baseline has established its watermark. */
+export function applyLiveProjection(current: HistoryPage, key: string, value: unknown, seq: number): HistoryPage {
+  const projections = current.projections
+  if (projections === undefined || seq < projections.asOfSeq) return current
+  return {
+    ...current,
+    projections: {
+      asOfSeq: Math.max(projections.asOfSeq, seq),
+      values: { ...projections.values, [key]: value },
+    },
+  }
+}
+
+export function conversationMessagesEqual(left: ConversationMessage, right: ConversationMessage): boolean {
+  if (left === right) return true
+  if (left.id !== right.id || left.seq !== right.seq || left.time !== right.time || left.role !== right.role
+    || left.agent !== right.agent || left.streaming !== right.streaming || left.blocks.length !== right.blocks.length) return false
+  const blocksEqual = (leftBlocks: MessageBlock[], rightBlocks: MessageBlock[]): boolean => leftBlocks.length === rightBlocks.length && leftBlocks.every((block, index) => {
+    const other = rightBlocks[index]
+    if (other === undefined || block.kind !== other.kind) return false
+    if (block.kind === 'text') return other.kind === 'text' && block.text === other.text
+    if (block.kind === 'reasoning') return other.kind === 'reasoning' && block.text === other.text
+    if (block.kind === 'tool' && other.kind === 'tool') {
+      return block.name === other.name && block.arguments === other.arguments && block.callId === other.callId
+    }
+    if (block.kind === 'image' && other.kind === 'image') {
+      return block.label === other.label && block.attachmentId === other.attachmentId
+        && block.mediaType === other.mediaType && block.src === other.src && block.name === other.name
+    }
+    if (block.kind === 'thought' && other.kind === 'thought') return blocksEqual(block.blocks, other.blocks)
+    return block.kind === 'other' && other.kind === 'other' && block.value === other.value
+  })
+  return blocksEqual(left.blocks, right.blocks)
 }
 
 export interface ActivityItem {

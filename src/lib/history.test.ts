@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { projectConversation, projectQueue } from './history.ts'
+import {
+  appendLiveHistory,
+  applyLiveProjection,
+  ConversationProjector,
+  liveHistoryEntry,
+  mergeHistoryTail,
+  projectConversation,
+  projectQueue,
+} from './history.ts'
+import { providerHandoffText } from './provider-handoff.ts'
 import type { HistoryEntry } from './types.ts'
 
 function entry(seq: number, type: string, data: Record<string, unknown>): HistoryEntry {
@@ -39,9 +48,108 @@ describe('projectConversation', () => {
       }),
     ])
     expect(projected).toHaveLength(1)
-    expect(projected[0]).toMatchObject({ id: 'final' })
+    expect(projected[0]).toMatchObject({ id: 'assistant-turn-1' })
     expect(projected[0]?.streaming).toBeUndefined()
     expect(projected[0]?.blocks).toEqual([{ kind: 'text', text: 'settled' }])
+  })
+
+  it('folds every intermediate step into one thought process before the final answer', () => {
+    const projected = projectConversation([
+      entry(1, 'assistant/message', {
+        turn: 2,
+        step: 0,
+        message: { id: 'thinking', content: [{ type: 'text', text: 'I will inspect it.' }, { type: 'tool-call', name: 'terminal', arguments: 'pwd' }] },
+      }),
+      entry(2, 'assistant/message', {
+        turn: 2,
+        step: 1,
+        message: { id: 'answer', content: [{ type: 'reasoning', text: 'Result checked.' }, { type: 'text', text: 'Done.' }] },
+      }),
+    ])
+    expect(projected).toHaveLength(1)
+    expect(projected[0]?.blocks).toEqual([
+      { kind: 'thought', blocks: [
+        { kind: 'text', text: 'I will inspect it.' },
+        { kind: 'tool', name: 'terminal', arguments: 'pwd' },
+        { kind: 'reasoning', text: 'Result checked.' },
+      ] },
+      { kind: 'text', text: 'Done.' },
+    ])
+  })
+
+  it('hides model-only handoff blocks but keeps the current Host prompt', () => {
+    const context = providerHandoffText('Codex', {
+      messages: [{ role: 'assistant', text: 'Prior answer', seq: 1 }],
+      omitted: 0,
+    })
+    const projected = projectConversation([entry(1, 'user/message', {
+      id: 'handoff',
+      source: { kind: 'user' },
+      content: [
+        { type: 'text', text: context },
+        { type: 'text', text: 'Continue with DeepSeek' },
+      ],
+    })])
+    expect(projected[0]?.blocks).toEqual([{ kind: 'text', text: 'Continue with DeepSeek' }])
+  })
+
+  it('incrementally appends stream events while retaining settled message references', () => {
+    const projector = new ConversationProjector()
+    const firstPage = [entry(0, 'user/message', {
+      id: 'human', content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' },
+    })]
+    const first = projector.sync(firstPage)
+    const second = projector.sync([
+      ...firstPage,
+      entry(1, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'reply' } }),
+    ])
+
+    expect(second[0]).toBe(first[0])
+    expect(second[1]?.blocks).toEqual([{ kind: 'text', text: 'reply' }])
+  })
+})
+
+describe('live history updates', () => {
+  it('appends contiguous mux events and ignores replay overlap', () => {
+    const current = { events: [entry(0, 'turn/start', {})], hasMore: false }
+    const result = appendLiveHistory(current, [
+      entry(0, 'turn/start', {}),
+      entry(1, 'user/message', {}),
+      entry(2, 'assistant/chunk', {}),
+    ])
+    expect(result.gap).toBe(false)
+    expect(result.appended).toBe(2)
+    expect(result.page.events.map(item => item.event.seq)).toEqual([0, 1, 2])
+  })
+
+  it('requests a repair rather than appending across a seq gap', () => {
+    const current = { events: [entry(0, 'turn/start', {})], hasMore: false }
+    const result = appendLiveHistory(current, [entry(2, 'assistant/chunk', {})])
+    expect(result).toMatchObject({ page: current, appended: 0, gap: true })
+  })
+
+  it('keeps an already-loaded older window when a fresh tail lands', () => {
+    const current = { events: [entry(0, 'turn/start', {}), entry(1, 'user/message', {})], hasMore: false }
+    const tail = { events: [entry(1, 'user/message', {}), entry(2, 'turn/end', {})], hasMore: true }
+    const merged = mergeHistoryTail(current, tail)
+    expect(merged.events.map(item => item.event.seq)).toEqual([0, 1, 2])
+    expect(merged.hasMore).toBe(false)
+  })
+
+  it('parses durable mux events and applies projections above the baseline watermark', () => {
+    const parsed = liveHistoryEntry({
+      type: 'session/event',
+      sessionId: 'session',
+      event: { type: 'turn/end', seq: 3, time: 1003, data: { turn: 1 } },
+    })
+    expect(parsed).toEqual(entry(3, 'turn/end', { turn: 1 }))
+
+    const page = { events: [], hasMore: false, projections: { asOfSeq: 2, values: { title: 'Old' } } }
+    expect(applyLiveProjection(page, 'title', 'New', 3).projections).toEqual({
+      asOfSeq: 3,
+      values: { title: 'New' },
+    })
+    expect(applyLiveProjection(page, 'title', 'Stale', 1)).toBe(page)
   })
 })
 

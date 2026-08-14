@@ -16,10 +16,15 @@ contextBridge.exposeInMainWorld('dshDesktop', {
   openSessionWindow: (sessionId: string) => ipcRenderer.invoke('dsh:open-session-window', sessionId),
   respond: (rpcId: string, result: unknown) => ipcRenderer.invoke('dsh:respond', rpcId, result),
   exportSession: (sessionId: string, includeDescendants: boolean) => ipcRenderer.invoke('dsh:export-session', sessionId, includeDescendants),
-  codexCatalog: () => ipcRenderer.invoke('dsh:codex-catalog'),
+  codexCatalog: (refresh?: boolean) => ipcRenderer.invoke('dsh:codex-catalog', refresh),
+  codexUsage: () => ipcRenderer.invoke('dsh:codex-usage'),
+  deepSeekBilling: () => ipcRenderer.invoke('dsh:deepseek-billing'),
+  setDeepSeekBillingKey: (value: string) => ipcRenderer.invoke('dsh:set-deepseek-billing-key', value),
+  removeDeepSeekBillingKey: () => ipcRenderer.invoke('dsh:remove-deepseek-billing-key'),
   codexPrompt: (payload: unknown) => ipcRenderer.invoke('dsh:codex-prompt', payload),
   codexReadThread: (threadId: string) => ipcRenderer.invoke('dsh:codex-read-thread', threadId),
   codexInterrupt: (threadId: string, turnId: string) => ipcRenderer.invoke('dsh:codex-interrupt', threadId, turnId),
+  codexRespondApproval: (requestId: string | number, approved: boolean) => ipcRenderer.invoke('dsh:codex-respond-approval', requestId, approved),
   connectionState: () => ipcRenderer.invoke('dsh:connection-state') as Promise<ConnectionState>,
   onDownlink: (listener: (frame: unknown) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, frame: unknown): void => listener(frame)

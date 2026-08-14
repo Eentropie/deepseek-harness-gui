@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { Icon } from './Icon.tsx'
 import { Markdown } from './Markdown.tsx'
 import { WhaleLogo } from './WhaleLogo.tsx'
-import type { ConversationMessage, MessageBlock } from '../lib/types.ts'
+import { conversationMessagesEqual } from '../lib/history.ts'
+import type { ConversationMessage, MessageBlock, ProcessBlock } from '../lib/types.ts'
 
 interface ConversationProps {
   messages: ConversationMessage[]
@@ -16,8 +17,10 @@ interface ConversationProps {
   onUseSuggestion: (prompt: string) => void
 }
 
+const TIME_FORMATTER = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
+
 function timeLabel(timestamp: number): string {
-  return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(timestamp)
+  return TIME_FORMATTER.format(timestamp)
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -38,8 +41,14 @@ function blockText(blocks: MessageBlock[]): string {
   return blocks.flatMap(block => {
     if (block.kind === 'text' || block.kind === 'reasoning') return [block.text]
     if (block.kind === 'tool') return [`${block.name}\n${block.arguments}`]
+    if (block.kind === 'thought') return [blockText(block.blocks)]
     return []
   }).join('\n\n')
+}
+
+function ProcessContent({ block }: { block: ProcessBlock }) {
+  if (block.kind === 'text' || block.kind === 'reasoning') return <Markdown>{block.text}</Markdown>
+  return <RenderBlock block={block} />
 }
 
 function RenderBlock({ block }: { block: MessageBlock }) {
@@ -51,6 +60,15 @@ function RenderBlock({ block }: { block: MessageBlock }) {
         <details className="reasoning-block">
           <summary><Icon name="brain" size={14} /> Thought process</summary>
           <div className="reasoning-body"><Markdown>{block.text}</Markdown></div>
+        </details>
+      )
+    case 'thought':
+      return (
+        <details className="reasoning-block">
+          <summary><Icon name="brain" size={14} /> Thought process</summary>
+          <div className="reasoning-body">
+            {block.blocks.map((item, index) => <ProcessContent block={item} key={`thought-${index}`} />)}
+          </div>
         </details>
       )
     case 'tool':
@@ -73,7 +91,7 @@ function RenderBlock({ block }: { block: MessageBlock }) {
   }
 }
 
-function Message({ message }: { message: ConversationMessage }) {
+const Message = memo(function Message({ message }: { message: ConversationMessage }) {
   const text = blockText(message.blocks)
   return (
     <article className="message" data-role={message.role} data-streaming={message.streaming === true}>
@@ -95,7 +113,7 @@ function Message({ message }: { message: ConversationMessage }) {
       </div>
     </article>
   )
-}
+}, (previous, next) => conversationMessagesEqual(previous.message, next.message))
 
 const suggestions = [
   { icon: 'sparkles' as const, title: 'Explore this workspace', prompt: '请先阅读当前工作区，概括项目结构、关键入口和运行方式。' },
@@ -130,15 +148,23 @@ function EmptyConversation({ workspace, greeting, onUseSuggestion }: Pick<Conver
 export function Conversation({ messages, loading, workspace, hasMore, loadingOlder, greeting, onLoadOlder, onUseSuggestion }: ConversationProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const lastId = messages.at(-1)?.id
-  const lastBlockSize = messages.at(-1)?.blocks.reduce((size, block) =>
-    size + (block.kind === 'text' || block.kind === 'reasoning' ? block.text.length : 0), 0) ?? 0
+  const lastStreaming = messages.at(-1)?.streaming === true
+  const lastBlockSize = messages.at(-1)?.blocks.reduce((size, block) => {
+    if (block.kind === 'text' || block.kind === 'reasoning') return size + block.text.length
+    if (block.kind === 'thought') return size + blockText(block.blocks).length
+    return size
+  }, 0) ?? 0
 
   useEffect(() => {
     const scroll = scrollRef.current
     if (scroll === null) return
     const distance = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
-    if (distance < 220) scroll.scrollTo({ top: scroll.scrollHeight, behavior: 'smooth' })
-  }, [lastId, lastBlockSize])
+    if (distance >= 220) return
+    const frame = window.requestAnimationFrame(() => {
+      scroll.scrollTo({ top: scroll.scrollHeight, behavior: lastStreaming ? 'auto' : 'smooth' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [lastBlockSize, lastId, lastStreaming])
 
   return (
     <div className="conversation-scroll" ref={scrollRef}>

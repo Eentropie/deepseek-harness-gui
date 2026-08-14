@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -5,7 +6,7 @@ interface MarkdownProps {
   children: string
 }
 
-export function Markdown({ children }: MarkdownProps) {
+export const Markdown = memo(function Markdown({ children }: MarkdownProps) {
   return (
     <div className="markdown">
       <ReactMarkdown
@@ -26,4 +27,4 @@ export function Markdown({ children }: MarkdownProps) {
       </ReactMarkdown>
     </div>
   )
-}
+})

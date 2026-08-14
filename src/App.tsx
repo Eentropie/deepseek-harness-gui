@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { Composer } from './components/Composer.tsx'
 import { CommandPalette } from './components/CommandPalette.tsx'
 import { Conversation } from './components/Conversation.tsx'
@@ -15,18 +15,37 @@ import {
 } from './components/SettingsPanel.tsx'
 import { Sidebar } from './components/Sidebar.tsx'
 import { codexApi, harnessApi, subscribeCodex, subscribeDownlinks } from './lib/api.ts'
-import { frameSessionId, projectActivity, projectConversation, projectQueue } from './lib/history.ts'
+import { applyCodexDeltas, type CodexDeltaEvent } from './lib/codex-stream.ts'
+import {
+  appendLiveHistory,
+  applyLiveProjection,
+  ConversationProjector,
+  frameSessionId,
+  liveHistoryEntry,
+  mergeHistoryTail,
+  projectActivity,
+  projectQueue,
+} from './lib/history.ts'
 import { chooseGreeting } from './lib/greetings.ts'
+import {
+  collectProviderHandoff,
+  mergeProviderTranscripts,
+  providerHandoffText,
+} from './lib/provider-handoff.ts'
+import { TrailingTask } from './lib/trailing-task.ts'
 import type {
   GoalProjection,
   HistoryPage,
   CodexCatalog,
   CodexEvent,
+  CodexPermissionMode,
   ConversationMessage,
   HostDescription,
+  HistoryEntry,
   JobView,
   ImageMediaType,
   PendingAttachment,
+  PermissionOption,
   PluginControlSnapshot,
   PluginEntry,
   PromptContentPart,
@@ -46,8 +65,15 @@ type ConnectionState = 'connecting' | 'connected' | 'reconnecting'
 
 const EMPTY_HISTORY: HistoryPage = { events: [], hasMore: false }
 const CODEX_PROVIDER = 'codex-cli'
+const DEFAULT_CODEX_PERMISSION: CodexPermissionMode = 'ask-for-approval'
+const CODEX_PERMISSION_OPTIONS: PermissionOption[] = [
+  { value: 'ask-for-approval', name: 'Ask for approval', description: 'Ask you before privileged commands or sandbox escapes.' },
+  { value: 'approve-for-me', name: 'Approve for me', description: 'Route approval requests to the Codex automatic reviewer.' },
+  { value: 'full-access', name: 'Full access', description: 'Run without approval prompts or filesystem sandboxing.' },
+]
 const STARTUP_SESSION_ID = new URLSearchParams(window.location.search).get('sessionId') ?? undefined
 const GREETING_STORAGE_KEY = 'dsh-workbench-last-greeting'
+const DRAFT_STORAGE_KEY = 'dsh-workbench-session-drafts'
 const STARTUP_GREETING = (() => {
   const greeting = chooseGreeting(new Date(), localStorage.getItem(GREETING_STORAGE_KEY) ?? undefined)
   localStorage.setItem(GREETING_STORAGE_KEY, greeting)
@@ -59,9 +85,19 @@ interface CodexSessionState {
   threadId?: string
   model?: string
   effort?: string
+  permission?: CodexPermissionMode
+  codexImportedHostSeq?: number
+  deepSeekImportedCodexSeq?: number
 }
 
-const EMPTY_CODEX_SESSION: CodexSessionState = { active: false }
+interface PendingSession {
+  key: string
+  workspaceId?: string
+  cwd?: string
+  agentPreset?: string
+}
+
+const EMPTY_CODEX_SESSION: CodexSessionState = { active: false, permission: DEFAULT_CODEX_PERMISSION }
 
 function codexSessionKey(sessionId: string): string {
   return `dsh-workbench-codex-session:${sessionId}`
@@ -72,11 +108,22 @@ function readCodexSession(sessionId: string): CodexSessionState {
     const value = JSON.parse(localStorage.getItem(codexSessionKey(sessionId)) ?? 'null') as unknown
     if (typeof value !== 'object' || value === null) return EMPTY_CODEX_SESSION
     const record = value as Record<string, unknown>
+    const rawPermission = record['permission']
+    const permission = rawPermission === 'ask-for-approval' || rawPermission === 'approve-for-me' || rawPermission === 'full-access'
+      ? rawPermission
+      : DEFAULT_CODEX_PERMISSION
     return {
       active: record['active'] === true,
       ...(typeof record['threadId'] === 'string' ? { threadId: record['threadId'] } : {}),
       ...(typeof record['model'] === 'string' ? { model: record['model'] } : {}),
       ...(typeof record['effort'] === 'string' ? { effort: record['effort'] } : {}),
+      ...(typeof record['codexImportedHostSeq'] === 'number' && Number.isSafeInteger(record['codexImportedHostSeq'])
+        ? { codexImportedHostSeq: record['codexImportedHostSeq'] }
+        : {}),
+      ...(typeof record['deepSeekImportedCodexSeq'] === 'number' && Number.isSafeInteger(record['deepSeekImportedCodexSeq'])
+        ? { deepSeekImportedCodexSeq: record['deepSeekImportedCodexSeq'] }
+        : {}),
+      permission,
     }
   } catch {
     return EMPTY_CODEX_SESSION
@@ -118,6 +165,18 @@ function storedStringSet(key: string): Set<string> {
   }
 }
 
+function storedDrafts(): Record<string, string> {
+  try {
+    const value = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) ?? '{}') as unknown
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+      .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1] !== '')
+      .slice(-60))
+  } catch {
+    return {}
+  }
+}
+
 function storedThemeMode(): ThemeMode {
   const value = localStorage.getItem('dsh-workbench-theme-mode')
     ?? localStorage.getItem('dsh-workbench-theme')
@@ -149,6 +208,7 @@ export function App() {
   const [unreadSessionIds, setUnreadSessionIds] = useState(() => storedStringSet('dsh-workbench-unread-sessions'))
   const [deletedSessionIds, setDeletedSessionIds] = useState(() => storedStringSet('dsh-workbench-deleted-sessions'))
   const [subagentView, setSubagentView] = useState<{ parentSessionId: string; childSessionId: string; mode: 'one-shot' | 'continuable'; label: string }>()
+  const [pendingSession, setPendingSession] = useState<PendingSession>()
   const [history, setHistory] = useState<HistoryPage>(EMPTY_HISTORY)
   const [models, setModels] = useState<SessionModels>()
   const [codexCatalog, setCodexCatalog] = useState<CodexCatalog>({
@@ -165,7 +225,7 @@ export function App() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyLoadingOlder, setHistoryLoadingOlder] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [draft, setDraft] = useState('')
+  const [drafts, setDrafts] = useState<Record<string, string>>(storedDrafts)
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const [queueBySession, setQueueBySession] = useState<Record<string, QueueItem[]>>({})
   const [jobsBySession, setJobsBySession] = useState<Record<string, JobView[]>>({})
@@ -197,10 +257,22 @@ export function App() {
   const [fontStatus, setFontStatus] = useState<LocalFontStatus>('checking')
   const selectedRef = useRef<string>()
   const historyGeneration = useRef(0)
+  const historyRef = useRef<HistoryPage>(EMPTY_HISTORY)
   const searchGeneration = useRef(0)
+  const chromeRefreshes = useRef(new TrailingTask<'chrome'>())
+  const historyRefreshes = useRef(new TrailingTask<string>())
+  const conversationProjector = useRef<{ owner: string; projector: ConversationProjector }>()
+  const codexDeltaQueue = useRef<CodexDeltaEvent[]>([])
+  const codexDeltaTimer = useRef<number>()
+  const providerTranscriptCache = useRef<Record<string, {
+    deepSeek: ConversationMessage[]
+    codex: ConversationMessage[]
+  }>>({})
   const dark = themeMode === 'dark' || (themeMode === 'system' && systemDark)
 
   const selectSession = useCallback((sessionId: string): void => {
+    setPendingSession(undefined)
+    setSubagentView(undefined)
     setSelectedId(sessionId)
     setUnreadSessionIds(current => {
       if (!current.has(sessionId)) return current
@@ -218,14 +290,60 @@ export function App() {
     () => workspaces.find(workspace => selectedId !== undefined && workspace.sessionIds.includes(selectedId)),
     [selectedId, workspaces],
   )
-  const messages = useMemo(() => projectConversation(history.events).map(message => ({
-    ...message,
-    blocks: message.blocks.map(block => {
-      if (block.kind !== 'image' || block.attachmentId === undefined) return block
-      const source = attachmentSources[`${subagentView?.childSessionId ?? selectedId ?? ''}:${block.attachmentId}`]
-      return source === undefined ? block : { ...block, src: source }
-    }),
-  })), [attachmentSources, history.events, selectedId, subagentView?.childSessionId])
+  const pendingWorkspace = useMemo(
+    () => workspaces.find(workspace => workspace.workspaceId === pendingSession?.workspaceId),
+    [pendingSession?.workspaceId, workspaces],
+  )
+  const activeWorkspace = selectedWorkspace ?? pendingWorkspace
+  const draftKey = pendingSession?.key
+    ?? (subagentView === undefined ? selectedId : `subagent:${subagentView.childSessionId}`)
+    ?? 'pending:unscoped'
+  const draft = drafts[draftKey] ?? ''
+  const setDraft = useCallback<Dispatch<SetStateAction<string>>>((nextValue) => {
+    setDrafts(current => {
+      const currentValue = current[draftKey] ?? ''
+      const value = typeof nextValue === 'function' ? nextValue(currentValue) : nextValue
+      const { [draftKey]: _discarded, ...rest } = current
+      return value === '' ? rest : { ...rest, [draftKey]: value }
+    })
+  }, [draftKey])
+  const messages = useMemo(() => {
+    const owner = subagentView?.childSessionId ?? selectedId ?? 'pending'
+    if (conversationProjector.current?.owner !== owner) {
+      conversationProjector.current = { owner, projector: new ConversationProjector() }
+    }
+    const projected = conversationProjector.current.projector.sync(history.events)
+    let changed = false
+    const withAttachments = projected.map(message => {
+      let blocksChanged = false
+      const blocks = message.blocks.map(block => {
+        if (block.kind !== 'image' || block.attachmentId === undefined) return block
+        const source = attachmentSources[`${owner}:${block.attachmentId}`]
+        if (source === undefined || source === block.src) return block
+        blocksChanged = true
+        return { ...block, src: source }
+      })
+      if (!blocksChanged) return message
+      changed = true
+      return { ...message, blocks }
+    })
+    return changed ? withAttachments : projected
+  }, [attachmentSources, history.events, selectedId, subagentView?.childSessionId])
+  let providerCache: { deepSeek: ConversationMessage[]; codex: ConversationMessage[] } | undefined
+  if (selectedId !== undefined) {
+    providerCache = providerTranscriptCache.current[selectedId] ?? { deepSeek: [], codex: [] }
+    if (messages.length > 0) providerCache.deepSeek = messages
+    if (codexMessages.length > 0) providerCache.codex = codexMessages
+    providerTranscriptCache.current[selectedId] = providerCache
+  }
+  const retainedDeepSeekMessages = messages.length > 0 ? messages : providerCache?.deepSeek ?? []
+  const retainedCodexMessages = codexMessages.length > 0 ? codexMessages : providerCache?.codex ?? []
+  const unifiedMessages = useMemo(
+    () => subagentView === undefined
+      ? mergeProviderTranscripts(retainedDeepSeekMessages, retainedCodexMessages)
+      : messages,
+    [messages, retainedCodexMessages, retainedDeepSeekMessages, subagentView],
+  )
   const activity = useMemo(() => projectActivity(history.events), [history.events])
   const projectionValues = history.projections?.values ?? selected?.projections?.values
   const permissions = projectionValues?.permissions
@@ -280,6 +398,20 @@ export function App() {
     }
   }, [codexCatalog, codexSession, models])
   const codexActive = subagentView === undefined && presentedModels?.current.provider === CODEX_PROVIDER
+  const codexPermission = codexSession.permission ?? DEFAULT_CODEX_PERMISSION
+
+  const refreshCodexCatalog = useCallback(async (force = false): Promise<void> => {
+    try {
+      setCodexCatalog(await codexApi.catalog(force))
+    } catch (reason) {
+      setCodexCatalog({
+        available: false,
+        authenticatedWith: 'ChatGPT',
+        models: [],
+        error: errorText(reason),
+      })
+    }
+  }, [])
 
   useEffect(() => {
     selectedRef.current = selectedId
@@ -299,42 +431,90 @@ export function App() {
   }, [deletedSessionIds])
 
   useEffect(() => {
-    let active = true
-    void codexApi.catalog().then(catalog => {
-      if (active) setCodexCatalog(catalog)
-    }).catch(reason => {
-      if (!active) return
-      setCodexCatalog({
-        available: false,
-        authenticatedWith: 'ChatGPT',
-        models: [],
-        error: errorText(reason),
-      })
-    })
-    return () => { active = false }
+    try {
+      localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(Object.fromEntries(Object.entries(drafts).slice(-60))))
+    } catch {
+      // Keep drafts in memory if local storage is temporarily full or unavailable.
+    }
+  }, [drafts])
+
+  useEffect(() => {
+    void refreshCodexCatalog(true)
+  }, [refreshCodexCatalog])
+
+  useEffect(() => {
+    if (codexCatalog.available) return
+    const timer = window.setInterval(() => { void refreshCodexCatalog(true) }, 15_000)
+    return () => window.clearInterval(timer)
+  }, [codexCatalog.available, refreshCodexCatalog])
+
+  const flushCodexDeltas = useCallback((): void => {
+    if (codexDeltaTimer.current !== undefined) window.clearTimeout(codexDeltaTimer.current)
+    codexDeltaTimer.current = undefined
+    if (codexDeltaQueue.current.length === 0) return
+    const events = codexDeltaQueue.current
+    codexDeltaQueue.current = []
+    setCodexMessages(current => applyCodexDeltas(current, events))
+  }, [])
+
+  const queueCodexDelta = useCallback((event: CodexDeltaEvent): void => {
+    codexDeltaQueue.current.push(event)
+    if (codexDeltaTimer.current !== undefined) return
+    codexDeltaTimer.current = window.setTimeout(flushCodexDeltas, 48)
+  }, [flushCodexDeltas])
+
+  useEffect(() => () => {
+    if (codexDeltaTimer.current !== undefined) window.clearTimeout(codexDeltaTimer.current)
   }, [])
 
   useEffect(() => {
+    if (codexDeltaTimer.current !== undefined) window.clearTimeout(codexDeltaTimer.current)
+    codexDeltaTimer.current = undefined
+    codexDeltaQueue.current = []
     setCodexMessages([])
     setCodexRunning(false)
     setCodexTurnId(undefined)
-    if (selectedId === undefined) {
+    const stateKey = selectedId ?? pendingSession?.key
+    if (stateKey === undefined) {
       setCodexSession(EMPTY_CODEX_SESSION)
       return
     }
-    const state = readCodexSession(selectedId)
+    const state = readCodexSession(stateKey)
     setCodexSession(state)
-    if (state.threadId === undefined) return
+    if (selectedId === undefined || state.threadId === undefined) return
     let active = true
     void codexApi.readThread(state.threadId).then(snapshot => {
-      if (active && selectedRef.current === selectedId) setCodexMessages(snapshot.messages)
+      if (active && selectedRef.current === selectedId) {
+        setCodexMessages(snapshot.messages)
+      }
     }).catch(reason => {
       if (active && state.active) setActionError(`Codex 线程读取失败：${errorText(reason)}`)
     })
     return () => { active = false }
-  }, [selectedId])
+  }, [pendingSession?.key, selectedId])
 
   useEffect(() => subscribeCodex((event: CodexEvent) => {
+    if (event.type === 'usage-updated') return
+    if (event.type === 'approval-requested') {
+      const requestSessionId = event.sessionId ?? selectedRef.current
+      if (requestSessionId === undefined) {
+        void codexApi.respondApproval(event.requestId, false)
+        return
+      }
+      const rpcId = `codex-${String(event.requestId)}`
+      setPendingApprovals(current => current.some(item => item.rpcId === rpcId)
+        ? current
+        : [...current, {
+            rpcId,
+            sessionId: requestSessionId,
+            approvalId: String(event.requestId),
+            toolName: event.toolName,
+            ...(event.reason === undefined ? {} : { reason: event.reason }),
+            source: 'codex',
+            codexRequestId: event.requestId,
+          }])
+      return
+    }
     const sessionId = event.sessionId
     if (sessionId !== undefined && sessionId !== selectedRef.current) return
     if (event.type === 'turn-started') {
@@ -343,47 +523,26 @@ export function App() {
       return
     }
     if (event.type === 'assistant-delta' || event.type === 'reasoning-delta') {
-      const id = `codex-stream-${event.turnId}-${event.itemId}`
-      const kind = event.type === 'assistant-delta' ? 'text' : 'reasoning'
-      setCodexMessages(current => {
-        const index = current.findIndex(message => message.id === id)
-        if (index < 0) return [...current, {
-          id,
-          seq: Date.now(),
-          time: Date.now(),
-          role: 'assistant',
-          agent: 'Codex',
-          blocks: [{ kind, text: event.delta }],
-          streaming: true,
-        }]
-        const next = [...current]
-        const existing = next[index]
-        if (existing === undefined) return current
-        const block = existing.blocks[0]
-        next[index] = {
-          ...existing,
-          blocks: [{ kind, text: block?.kind === kind ? block.text + event.delta : event.delta }],
-          streaming: true,
-        }
-        return next
-      })
+      queueCodexDelta(event)
       return
     }
     if (event.type === 'turn-completed') {
-      setCodexRunning(false)
+      flushCodexDeltas()
       setCodexTurnId(undefined)
       if (event.status === 'failed') setActionError(`Codex 运行失败：${event.error ?? 'Unknown error'}`)
       void codexApi.readThread(event.threadId).then(snapshot => {
         if (event.sessionId === undefined || event.sessionId === selectedRef.current) setCodexMessages(snapshot.messages)
       }).catch(reason => setActionError(`Codex 线程刷新失败：${errorText(reason)}`))
+        .finally(() => setCodexRunning(false))
       return
     }
     if (event.type === 'error') {
+      flushCodexDeltas()
       setCodexRunning(false)
       setCodexTurnId(undefined)
       setActionError(`Codex CLI：${event.message}`)
     }
-  }), [])
+  }), [flushCodexDeltas, queueCodexDelta])
 
   useEffect(() => {
     const ownerSessionId = subagentView?.childSessionId ?? selectedId
@@ -457,7 +616,7 @@ export function App() {
     document.title = selected === undefined ? 'DeepSeek Harness' : `${titleOf(selected)} · DeepSeek Harness`
   }, [selected])
 
-  const refreshChrome = useCallback(async (signal?: AbortSignal): Promise<void> => {
+  const refreshChromeNow = useCallback(async (signal?: AbortSignal): Promise<void> => {
     try {
       const [description, sessionPage, workspacePage] = await Promise.all([
         harnessApi.describe(signal),
@@ -472,6 +631,7 @@ export function App() {
       setSelectedId(current => {
         if (current !== undefined && sessionPage.items.some(session => session.sessionId === current)
           && !deletedSessionIds.has(current)) return current
+        if (pendingSession !== undefined) return undefined
         const saved = resumeLastSession ? localStorage.getItem('dsh-workbench-session') : null
         if (saved !== null && !deletedSessionIds.has(saved)
           && sessionPage.items.some(session => session.sessionId === saved)) return saved
@@ -487,9 +647,14 @@ export function App() {
     } finally {
       if (signal?.aborted !== true) setChromeLoading(false)
     }
-  }, [deletedSessionIds, resumeLastSession])
+  }, [deletedSessionIds, pendingSession, resumeLastSession])
 
-  const refreshSession = useCallback(async (
+  const refreshChrome = useCallback((signal?: AbortSignal): Promise<void> => {
+    if (signal !== undefined) return refreshChromeNow(signal)
+    return chromeRefreshes.current.run('chrome', () => refreshChromeNow())
+  }, [refreshChromeNow])
+
+  const refreshSessionNow = useCallback(async (
     sessionId: string,
     options: { includeModels?: boolean; signal?: AbortSignal; showLoading?: boolean } = {},
   ): Promise<void> => {
@@ -509,7 +674,9 @@ export function App() {
         : Promise.resolve(undefined)
       const [nextHistory, nextModels] = await Promise.all([historyPromise, modelsPromise])
       if (generation !== historyGeneration.current || selectedRef.current !== sessionId) return
-      setHistory(nextHistory)
+      const mergedHistory = mergeHistoryTail(historyRef.current, nextHistory)
+      historyRef.current = mergedHistory
+      setHistory(mergedHistory)
       if (nextModels !== undefined) setModels(nextModels)
       setActionError(undefined)
     } catch (reason) {
@@ -519,6 +686,17 @@ export function App() {
       if (generation === historyGeneration.current && options.signal?.aborted !== true) setHistoryLoading(false)
     }
   }, [subagentView])
+
+  const refreshSession = useCallback((
+    sessionId: string,
+    options: { includeModels?: boolean; signal?: AbortSignal; showLoading?: boolean } = {},
+  ): Promise<void> => {
+    if (options.signal !== undefined || options.includeModels === true || options.showLoading === true) {
+      return refreshSessionNow(sessionId, options)
+    }
+    const target = subagentView?.parentSessionId === sessionId ? subagentView.childSessionId : sessionId
+    return historyRefreshes.current.run(target, () => refreshSessionNow(sessionId, options))
+  }, [refreshSessionNow, subagentView])
 
   const refreshPlugins = useCallback(async (signal?: AbortSignal): Promise<void> => {
     setPluginsLoading(true)
@@ -541,8 +719,9 @@ export function App() {
 
   useEffect(() => {
     setSubagentView(current => current?.parentSessionId === selectedId ? current : undefined)
+    historyRef.current = EMPTY_HISTORY
     setHistory(EMPTY_HISTORY)
-    setModels(undefined)
+    if (pendingSession === undefined) setModels(undefined)
     setSkills([])
     setSubagents(undefined)
     setActionError(undefined)
@@ -558,14 +737,53 @@ export function App() {
       if (subagentsResult.status === 'fulfilled') setSubagents(subagentsResult.value)
     })
     return () => controller.abort()
-  }, [refreshSession, selectedId, subagentView])
+  }, [pendingSession, refreshSession, selectedId, subagentView])
 
   useEffect(() => {
-    let refreshTimer: ReturnType<typeof setTimeout> | undefined
+    let chromeTimer: ReturnType<typeof setTimeout> | undefined
+    let historyTimer: ReturnType<typeof setTimeout> | undefined
+    let liveTimer: ReturnType<typeof setTimeout> | undefined
+    const liveEntries: HistoryEntry[] = []
+
+    const scheduleChromeRefresh = (): void => {
+      if (chromeTimer !== undefined) clearTimeout(chromeTimer)
+      chromeTimer = setTimeout(() => { void refreshChrome() }, 160)
+    }
+
+    const scheduleHistoryRepair = (): void => {
+      if (historyTimer !== undefined) return
+      historyTimer = setTimeout(() => {
+        historyTimer = undefined
+        const current = selectedRef.current
+        if (current !== undefined) void refreshSession(current)
+      }, 180)
+    }
+
+    const flushLiveEntries = (): void => {
+      liveTimer = undefined
+      if (liveEntries.length === 0) return
+      const batch = liveEntries.splice(0)
+      const result = appendLiveHistory(historyRef.current, batch)
+      if (result.page !== historyRef.current) {
+        historyRef.current = result.page
+        setHistory(result.page)
+      }
+      if (result.gap) scheduleHistoryRepair()
+    }
+
+    const queueLiveEntry = (entry: HistoryEntry): void => {
+      liveEntries.push(entry)
+      if (liveTimer !== undefined) return
+      liveTimer = setTimeout(flushLiveEntries, 48)
+    }
+
     const dispose = subscribeDownlinks((frame) => {
       const sessionId = frameSessionId(frame)
+      const ownerSessionId = subagentView?.childSessionId ?? selectedRef.current
+      let historyHandled = false
       if (frame['type'] === 'approval/requested' && typeof frame.__rpcId === 'string'
         && typeof sessionId === 'string' && typeof frame['approvalId'] === 'string' && typeof frame['toolName'] === 'string') {
+        historyHandled = true
         setPendingApprovals(current => current.some(item => item.rpcId === frame.__rpcId)
           ? current
           : [...current, {
@@ -578,18 +796,22 @@ export function App() {
             }])
       }
       if (frame['type'] === 'approval/resolved' && typeof frame['approvalId'] === 'string') {
+        historyHandled = true
         setPendingApprovals(current => current.filter(item => item.approvalId !== frame['approvalId']))
       }
       if (frame['type'] === 'question/requested' && typeof frame.__rpcId === 'string'
         && typeof sessionId === 'string' && Array.isArray(frame['questions'])) {
+        historyHandled = true
         setPendingQuestions(current => current.some(item => item.rpcId === frame.__rpcId)
           ? current
           : [...current, { rpcId: frame.__rpcId as string, sessionId, questions: frame['questions'] as QuestionRequest['questions'] }])
       }
       if (frame['type'] === 'question/resolved' && typeof frame['questionRpcId'] === 'string') {
+        historyHandled = true
         setPendingQuestions(current => current.filter(item => item.rpcId !== frame['questionRpcId']))
       }
       if (frame['type'] === 'session/jobs' && typeof sessionId === 'string' && Array.isArray(frame['jobs'])) {
+        historyHandled = true
         const jobs = frame['jobs'].flatMap(item => {
           if (typeof item !== 'object' || item === null) return []
           const row = item as Record<string, unknown>
@@ -611,21 +833,44 @@ export function App() {
       }
       const queue = projectQueue(frame)
       if (sessionId !== undefined && queue !== undefined) {
+        historyHandled = true
         setQueueBySession(current => ({ ...current, [sessionId]: queue }))
       }
-      if (refreshTimer !== undefined) clearTimeout(refreshTimer)
-      refreshTimer = setTimeout(() => {
-        void refreshChrome()
-        const current = selectedRef.current
-        const relevantSubagent = subagentView?.childSessionId === sessionId
-        if (current !== undefined && (sessionId === undefined || sessionId === current || relevantSubagent)) {
-          void refreshSession(current)
+
+      const liveEntry = liveHistoryEntry(frame)
+      if (liveEntry !== undefined) {
+        historyHandled = true
+        if (sessionId === ownerSessionId) queueLiveEntry(liveEntry)
+      }
+
+      if (frame['type'] === 'session/projection') {
+        historyHandled = true
+        if (sessionId === ownerSessionId && typeof frame['key'] === 'string' && typeof frame['seq'] === 'number') {
+          const next = applyLiveProjection(historyRef.current, frame['key'], frame['value'], frame['seq'])
+          if (next !== historyRef.current) {
+            historyRef.current = next
+            setHistory(next)
+          }
         }
-      }, 140)
+      }
+
+      if (frame['type'] === 'session/subscribed') {
+        historyHandled = true
+        const tailSeq = historyRef.current.events.at(-1)?.event.seq
+        if (sessionId === ownerSessionId && tailSeq !== undefined
+          && typeof frame['lastSeq'] === 'number' && frame['lastSeq'] > tailSeq) {
+          scheduleHistoryRepair()
+        }
+      }
+
+      scheduleChromeRefresh()
+      if (!historyHandled && sessionId === ownerSessionId) scheduleHistoryRepair()
     }, setConnection)
     const poll = setInterval(() => { void refreshChrome() }, 4_000)
     return () => {
-      if (refreshTimer !== undefined) clearTimeout(refreshTimer)
+      if (chromeTimer !== undefined) clearTimeout(chromeTimer)
+      if (historyTimer !== undefined) clearTimeout(historyTimer)
+      if (liveTimer !== undefined) clearTimeout(liveTimer)
       clearInterval(poll)
       dispose()
     }
@@ -636,9 +881,9 @@ export function App() {
       ? activeSubagent?.activity === 'running'
       : selected?.running === true
     if (selectedId === undefined || !running) return
-    const poll = setInterval(() => { void refreshSession(selectedId) }, 650)
+    const poll = setInterval(() => { void refreshSession(selectedId) }, connection === 'connected' ? 12_000 : 1_000)
     return () => clearInterval(poll)
-  }, [activeSubagent?.activity, refreshSession, selected?.running, selectedId, subagentView])
+  }, [activeSubagent?.activity, connection, refreshSession, selected?.running, selectedId, subagentView])
 
   useEffect(() => {
     if (!pluginsOpen && !settingsOpen) return
@@ -651,32 +896,51 @@ export function App() {
     }
   }, [pluginsOpen, refreshPlugins, settingsOpen])
 
+  const beginPendingSession = useCallback((workspace = selectedWorkspace ?? pendingWorkspace ?? workspaces[0], agentPreset?: string): string => {
+    const owner = workspace?.workspaceId ?? workspace?.path ?? host?.cwd ?? 'local'
+    const key = `pending:${owner}:${agentPreset ?? 'default'}`
+    setPendingSession({
+      key,
+      ...(workspace === undefined ? { cwd: host?.cwd } : { workspaceId: workspace.workspaceId }),
+      ...(agentPreset === undefined ? {} : { agentPreset }),
+    })
+    setSelectedId(undefined)
+    selectedRef.current = undefined
+    setSubagentView(undefined)
+    setActionError(undefined)
+    return key
+  }, [host?.cwd, pendingWorkspace, selectedWorkspace, workspaces])
+
   const createSession = useCallback(async (agentPreset?: string): Promise<string> => {
-    const workspace = selectedWorkspace ?? workspaces[0]
+    const workspace = pendingWorkspace ?? selectedWorkspace ?? workspaces[0]
+    const resolvedPreset = agentPreset ?? pendingSession?.agentPreset
     const result = await harnessApi.createSession(
       {
-        ...(workspace === undefined ? { cwd: host?.cwd } : { workspaceId: workspace.workspaceId }),
-        ...(agentPreset === undefined ? {} : { agentPreset }),
+        ...(workspace === undefined ? { cwd: pendingSession?.cwd ?? host?.cwd } : { workspaceId: workspace.workspaceId }),
+        ...(resolvedPreset === undefined ? {} : { agentPreset: resolvedPreset }),
       },
     )
+    if (pendingSession !== undefined) {
+      setDrafts(current => {
+        const text = current[pendingSession.key]
+        const { [pendingSession.key]: _pendingDraft, ...rest } = current
+        return text === undefined ? rest : { ...rest, [result.sessionId]: text }
+      })
+      const pendingCodex = readCodexSession(pendingSession.key)
+      writeCodexSession(result.sessionId, pendingCodex)
+      localStorage.removeItem(codexSessionKey(pendingSession.key))
+      setCodexSession(pendingCodex)
+    }
+    setPendingSession(undefined)
     setSelectedId(result.sessionId)
     selectedRef.current = result.sessionId
     await refreshChrome()
     return result.sessionId
-  }, [host?.cwd, refreshChrome, selectedWorkspace, workspaces])
+  }, [host?.cwd, pendingSession, pendingWorkspace, refreshChrome, selectedWorkspace, workspaces])
 
-  const handleNew = async (): Promise<void> => {
+  const handleNew = (): void => {
     if (busy) return
-    setBusy(true)
-    setActionError(undefined)
-    try {
-      await createSession()
-      setDraft('')
-    } catch (reason) {
-      setActionError(`新建会话失败：${errorText(reason)}`)
-    } finally {
-      setBusy(false)
-    }
+    beginPendingSession()
   }
 
   const handleSearch = useCallback(async (query: string): Promise<void> => {
@@ -759,6 +1023,11 @@ export function App() {
 
   const handleApproval = useCallback(async (request: ApprovalRequest, outcome: 'allowed-once' | 'rejected'): Promise<void> => {
     try {
+      if (request.source === 'codex' && request.codexRequestId !== undefined) {
+        await codexApi.respondApproval(request.codexRequestId, outcome === 'allowed-once')
+        setPendingApprovals(current => current.filter(item => item.rpcId !== request.rpcId))
+        return
+      }
       const receipt = await harnessApi.respond(request.rpcId, {
         ok: true,
         value: { sessionId: request.sessionId, approvalId: request.approvalId, outcome },
@@ -786,47 +1055,46 @@ export function App() {
   const handleCreatorPresetDraft = async (): Promise<void> => {
     if (busy) return
     setSettingsOpen(false)
-    setBusy(true)
     setActionError(undefined)
-    try {
-      await createSession('cordis')
-      setDraft('Help me create a custom DeepSeek Harness agent preset for ')
-    } catch (reason) {
-      setActionError(`Creator 预设会话创建失败：${errorText(reason)}`)
-    } finally {
-      setBusy(false)
-    }
+    const key = beginPendingSession(undefined, 'cordis')
+    setDrafts(current => ({ ...current, [key]: current[key] ?? 'Help me create a custom DeepSeek Harness agent preset for ' }))
   }
 
   const handleSend = async (): Promise<void> => {
     const prompt = draft.trim()
     if ((prompt === '' && attachments.length === 0) || busy) return
+    const tailBeforeSend = historyRef.current.events.at(-1)?.event.seq
+    const sourceDraftKey = draftKey
+    const wasPending = pendingSession !== undefined
+    const pendingModel = presentedModels?.current
     setBusy(true)
     setActionError(undefined)
-    setDraft('')
     try {
       const sessionId = selectedId ?? await createSession()
       if (codexActive) {
         if (attachments.length > 0) throw new Error('Codex CLI 当前只接受文本输入')
         const current = presentedModels?.current
-        const cwd = selectedWorkspace?.path ?? selected?.cwd ?? host?.cwd
+        const cwd = activeWorkspace?.path ?? pendingSession?.cwd ?? selected?.cwd ?? host?.cwd
         if (current === undefined || cwd === undefined) throw new Error('Codex model or work folder is unavailable')
         const optimisticId = `codex-user-${Date.now()}`
         setCodexMessages(messages => [...messages, {
           id: optimisticId,
-          seq: Date.now(),
+          seq: (messages.at(-1)?.seq ?? 0) + 1,
           time: Date.now(),
           role: 'user',
           blocks: [{ kind: 'text', text: prompt }],
         }])
         setCodexRunning(true)
+        const handoff = collectProviderHandoff(retainedDeepSeekMessages, codexSession.codexImportedHostSeq ?? 0)
         const result = await codexApi.prompt({
           sessionId,
           ...(codexSession.threadId === undefined ? {} : { threadId: codexSession.threadId }),
           cwd,
           model: current.model,
           effort: current.reasoningEffort ?? 'medium',
+          permission: codexPermission,
           prompt,
+          context: handoff.messages,
         })
         const next = {
           ...codexSession,
@@ -834,33 +1102,65 @@ export function App() {
           threadId: result.threadId,
           model: current.model,
           effort: current.reasoningEffort ?? 'medium',
+          permission: codexPermission,
+          ...(handoff.throughSeq === undefined ? {} : { codexImportedHostSeq: handoff.throughSeq }),
         }
         setCodexSession(next)
         writeCodexSession(sessionId, next)
         setCodexTurnId(result.turnId)
+        setDrafts(current => {
+          const nextDrafts = { ...current }
+          delete nextDrafts[sourceDraftKey]
+          delete nextDrafts[sessionId]
+          return nextDrafts
+        })
         return
+      }
+      if (wasPending && pendingModel !== undefined && pendingModel.provider !== CODEX_PROVIDER) {
+        await harnessApi.selectModel(sessionId, pendingModel.provider, pendingModel.model, pendingModel.reasoningEffort)
       }
       if (subagentView !== undefined) {
         if (subagentView.mode !== 'continuable') throw new Error('One-shot subagent 不能继续发送消息')
         if (attachments.length > 0) throw new Error('子代理会话暂不支持图片')
         await harnessApi.subagentPrompt({ parentSessionId: sessionId, childSessionId: subagentView.childSessionId, text: prompt })
       } else {
+        const handoff = collectProviderHandoff(retainedCodexMessages, codexSession.deepSeekImportedCodexSeq ?? 0)
         const content: PromptContentPart[] = [
+          ...(handoff.messages.length === 0
+            ? []
+            : [{ type: 'text' as const, text: providerHandoffText('Codex', handoff) }]),
           ...(prompt === '' ? [] : [{ type: 'text' as const, text: prompt }]),
           ...attachments.map(item => ({ type: 'image' as const, mediaType: item.mediaType, data: item.data, name: item.name })),
         ]
         await harnessApi.prompt(sessionId, content)
+        if (handoff.throughSeq !== undefined) {
+          const next = { ...codexSession, active: false, deepSeekImportedCodexSeq: handoff.throughSeq }
+          setCodexSession(next)
+          writeCodexSession(sessionId, next)
+        }
       }
+      setDrafts(current => {
+        const nextDrafts = { ...current }
+        delete nextDrafts[sourceDraftKey]
+        delete nextDrafts[sessionId]
+        return nextDrafts
+      })
       releaseAttachments(attachments)
       setAttachments([])
-      await Promise.all([refreshChrome(), refreshSession(sessionId)])
-      window.setTimeout(() => { void refreshSession(sessionId) }, 250)
+      void refreshChrome()
+      window.setTimeout(() => {
+        if (selectedRef.current !== sessionId) return
+        const tailAfterSend = historyRef.current.events.at(-1)?.event.seq
+        const liveEventLanded = tailBeforeSend === undefined
+          ? tailAfterSend !== undefined
+          : tailAfterSend !== undefined && tailAfterSend > tailBeforeSend
+        if (!liveEventLanded) void refreshSession(sessionId)
+      }, 700)
     } catch (reason) {
       if (codexActive) {
         setCodexRunning(false)
         setCodexTurnId(undefined)
       }
-      setDraft(current => current === '' ? prompt : current)
       setActionError(`发送失败：${errorText(reason)}`)
     } finally {
       setBusy(false)
@@ -872,7 +1172,7 @@ export function App() {
     setBusy(true)
     setActionError(undefined)
     try {
-      if (codexActive && codexSession.threadId !== undefined && codexTurnId !== undefined) {
+      if (codexRunning && codexSession.threadId !== undefined && codexTurnId !== undefined) {
         await codexApi.interrupt(codexSession.threadId, codexTurnId)
         return
       }
@@ -890,7 +1190,8 @@ export function App() {
   }
 
   const handleModel = async (provider: string, model: string): Promise<void> => {
-    if (selectedId === undefined || presentedModels === undefined || busy || subagentView !== undefined) return
+    const stateKey = selectedId ?? pendingSession?.key
+    if (stateKey === undefined || presentedModels === undefined || busy || subagentView !== undefined) return
     const modelEntry = presentedModels.groups.find(group => group.id === provider)?.models.find(entry => entry.id === model)
     const currentEffort = provider === CODEX_PROVIDER
       ? codexSession.effort
@@ -903,9 +1204,20 @@ export function App() {
     try {
       if (provider === CODEX_PROVIDER) {
         if (modelEntry === undefined || effort === undefined) throw new Error('Codex model metadata is unavailable')
-        const next = { ...codexSession, active: true, model, effort }
+        const next = { ...codexSession, active: true, model, effort, permission: codexPermission }
         setCodexSession(next)
-        writeCodexSession(selectedId, next)
+        writeCodexSession(stateKey, next)
+        setActionError(undefined)
+        return
+      }
+      if (selectedId === undefined) {
+        setModels(current => current === undefined ? current : {
+          ...current,
+          current: { provider, model, ...(effort === undefined ? {} : { reasoningEffort: effort }) },
+        })
+        const next = { ...codexSession, active: false }
+        setCodexSession(next)
+        writeCodexSession(stateKey, next)
         setActionError(undefined)
         return
       }
@@ -923,7 +1235,8 @@ export function App() {
   }
 
   const handleEffort = async (effort: string): Promise<void> => {
-    if (selectedId === undefined || presentedModels === undefined || busy || subagentView !== undefined) return
+    const stateKey = selectedId ?? pendingSession?.key
+    if (stateKey === undefined || presentedModels === undefined || busy || subagentView !== undefined) return
     setBusy(true)
     try {
       if (codexActive) {
@@ -933,7 +1246,15 @@ export function App() {
         }
         const next = { ...codexSession, active: true, model: model.id, effort }
         setCodexSession(next)
-        writeCodexSession(selectedId, next)
+        writeCodexSession(stateKey, next)
+        setActionError(undefined)
+        return
+      }
+      if (selectedId === undefined) {
+        setModels(current => current === undefined ? current : {
+          ...current,
+          current: { ...current.current, reasoningEffort: effort },
+        })
         setActionError(undefined)
         return
       }
@@ -952,7 +1273,21 @@ export function App() {
   }
 
   const handlePermission = async (preset: string): Promise<void> => {
-    if (selectedId === undefined || busy || subagentView !== undefined || preset === permissions?.currentValue) return
+    const stateKey = selectedId ?? pendingSession?.key
+    if (stateKey === undefined || busy || subagentView !== undefined) return
+    if (codexActive) {
+      if (preset !== 'ask-for-approval' && preset !== 'approve-for-me' && preset !== 'full-access') return
+      if (preset === codexPermission) return
+      if (preset === 'full-access' && !window.confirm('Full access disables Codex approval prompts and filesystem sandboxing. Continue?')) return
+      const permission = preset as CodexPermissionMode
+      const next = { ...codexSession, active: true, permission }
+      setCodexSession(next)
+      writeCodexSession(stateKey, next)
+      setActionError(undefined)
+      return
+    }
+    if (selectedId === undefined) return
+    if (preset === permissions?.currentValue) return
     if (preset === 'danger-full-access' && !window.confirm('切换到 danger-full-access 会取消文件沙箱限制。确定继续吗？')) return
     setBusy(true)
     try {
@@ -1008,24 +1343,13 @@ export function App() {
 
   const handleWorkspace = async (workspace: WorkspaceSummary): Promise<void> => {
     if (busy) return
-    setBusy(true)
     setActionError(undefined)
-    try {
-      const existing = workspace.sessionIds
-        .map(id => sessions.find(session => session.sessionId === id))
-        .filter((session): session is SessionSummary => session !== undefined)
-        .sort((left, right) => right.updatedAt - left.updatedAt)[0]
-      const sessionId = existing?.sessionId
-        ?? (await harnessApi.createSession({ workspaceId: workspace.workspaceId })).sessionId
-      setSelectedId(sessionId)
-      selectedRef.current = sessionId
-      setDraft('')
-      await refreshChrome()
-    } catch (reason) {
-      setActionError(`工作文件夹切换失败：${errorText(reason)}`)
-    } finally {
-      setBusy(false)
-    }
+    const existing = workspace.sessionIds
+      .map(id => sessions.find(session => session.sessionId === id))
+      .filter((session): session is SessionSummary => session !== undefined)
+      .sort((left, right) => right.updatedAt - left.updatedAt)[0]
+    if (existing === undefined) beginPendingSession(workspace)
+    else selectSession(existing.sessionId)
   }
 
   const handleRenameSession = async (session: SessionSummary = selected as SessionSummary): Promise<void> => {
@@ -1103,6 +1427,7 @@ export function App() {
       return next
     })
     localStorage.removeItem(codexSessionKey(session.sessionId))
+    delete providerTranscriptCache.current[session.sessionId]
     if (session.sessionId === selectedId) {
       setSubagentView(undefined)
       setSelectedId(undefined)
@@ -1112,7 +1437,7 @@ export function App() {
   }
 
   const handleOpenPath = async (path?: string): Promise<void> => {
-    const target = path ?? selectedWorkspace?.path ?? selected?.cwd ?? host?.cwd
+    const target = path ?? activeWorkspace?.path ?? pendingSession?.cwd ?? selected?.cwd ?? host?.cwd
     if (target === undefined || busy) return
     setBusy(true)
     try {
@@ -1241,12 +1566,7 @@ export function App() {
       } else if (action === 'copy-working-directory') {
         await desktop.copyText(workspace.path)
       } else if (action === 'new-session') {
-        setBusy(true)
-        const result = await harnessApi.createSession({ workspaceId: workspace.workspaceId })
-        selectSession(result.sessionId)
-        selectedRef.current = result.sessionId
-        setDraft('')
-        await refreshChrome()
+        beginPendingSession(workspace)
       } else if (action === 'open-new-window') {
         const sessionId = workspace.sessionIds
           .map(id => sessions.find(session => session.sessionId === id))
@@ -1304,16 +1624,17 @@ export function App() {
             beforeSeq,
           })
       if (selectedRef.current !== selectedId) return
-      setHistory(current => {
-        const bySeq = new Map<number, typeof current.events[number]>()
-        current.events.forEach(item => bySeq.set(item.event.seq, item))
-        page.events.forEach(item => bySeq.set(item.event.seq, item))
-        return {
-          ...current,
-          events: [...bySeq.values()].sort((left, right) => left.event.seq - right.event.seq),
-          hasMore: page.hasMore,
-        }
-      })
+      const current = historyRef.current
+      const bySeq = new Map<number, typeof current.events[number]>()
+      current.events.forEach(item => bySeq.set(item.event.seq, item))
+      page.events.forEach(item => bySeq.set(item.event.seq, item))
+      const next = {
+        ...current,
+        events: [...bySeq.values()].sort((left, right) => left.event.seq - right.event.seq),
+        hasMore: page.hasMore,
+      }
+      historyRef.current = next
+      setHistory(next)
     } catch (reason) {
       setActionError(`读取更早历史失败：${errorText(reason)}`)
     } finally {
@@ -1339,7 +1660,6 @@ export function App() {
   const handleOpenSubagent = (entry: Extract<SubagentEntry, { kind: 'child' }>): void => {
     if (selectedId === undefined) return
     setActionError(undefined)
-    setDraft('')
     setAttachments(current => { releaseAttachments(current); return [] })
     setSubagentView({
       parentSessionId: selectedId,
@@ -1398,12 +1718,9 @@ export function App() {
         .map(id => sessions.find(session => session.sessionId === id))
         .filter((session): session is SessionSummary => session !== undefined)
         .sort((left, right) => right.updatedAt - left.updatedAt)[0]
-      const sessionId = existing?.sessionId
-        ?? (await harnessApi.createSession({ workspaceId: workspace.workspaceId })).sessionId
-      setSelectedId(sessionId)
-      selectedRef.current = sessionId
-      setDraft('')
       await refreshChrome()
+      if (existing === undefined) beginPendingSession(workspace)
+      else selectSession(existing.sessionId)
     } catch (reason) {
       setActionError(`打开工作文件夹失败：${errorText(reason)}`)
     } finally {
@@ -1463,14 +1780,12 @@ export function App() {
   useEffect(() => window.dshDesktop?.onOpenPlugins(openPlugins), [openPlugins])
   useEffect(() => window.dshDesktop?.onOpenSettings(openSettings), [openSettings])
 
-  const currentFolder = selectedWorkspace?.title ?? basename(selected?.cwd) ?? basename(host?.cwd) ?? 'Local workspace'
+  const currentFolder = activeWorkspace?.title ?? basename(pendingSession?.cwd) ?? basename(selected?.cwd) ?? basename(host?.cwd) ?? 'Local workspace'
   const offline = host === undefined && !chromeLoading
-  const activeMessages = codexActive ? codexMessages : messages
-  const activeRunning = codexActive
-    ? codexRunning
-    : subagentView !== undefined
-      ? activeSubagent?.activity === 'running'
-      : selected?.running === true
+  const activeMessages = unifiedMessages
+  const activeRunning = subagentView !== undefined
+    ? activeSubagent?.activity === 'running'
+    : codexRunning || selected?.running === true
   const activeTitle = subagentView?.label ?? titleOf(selected)
   const activeModels = subagentView === undefined ? presentedModels : undefined
   const activeJobs = subagentView === undefined
@@ -1487,7 +1802,7 @@ export function App() {
         pinnedSessionIds={pinnedSessionIds}
         unreadSessionIds={unreadSessionIds}
         deletedSessionIds={deletedSessionIds}
-        activeWorkspaceId={selectedWorkspace?.workspaceId}
+        activeWorkspaceId={activeWorkspace?.workspaceId}
         collapsed={!sidebarExpanded}
         onSelect={selectSession}
         onNew={() => { void handleNew() }}
@@ -1540,7 +1855,7 @@ export function App() {
             <button type="button" className="icon-button" onClick={openSettings} aria-label="Open Settings" title="Settings (⌘,)">
               <Icon name="settings" size={15} />
             </button>
-            <button type="button" className="icon-button" onClick={() => void refreshChrome()} aria-label="Refresh">
+            <button type="button" className="icon-button" onClick={() => { void refreshChrome(); void refreshCodexCatalog(true) }} aria-label="Refresh">
               <Icon name="refresh" size={15} />
             </button>
             {!inspectorOpen && (
@@ -1572,7 +1887,7 @@ export function App() {
           title={activeTitle}
           workspace={currentFolder}
           greeting={STARTUP_GREETING}
-          hasMore={codexActive ? false : history.hasMore}
+          hasMore={history.hasMore}
           loadingOlder={historyLoadingOlder}
           onLoadOlder={() => { void handleLoadOlder() }}
           onUseSuggestion={setDraft}
@@ -1583,13 +1898,13 @@ export function App() {
           onChange={setDraft}
           onSend={() => { void handleSend() }}
           onStop={() => { void handleStop() }}
-          disabled={codexActive ? !codexCatalog.available || selectedId === undefined : subagentView?.mode === 'one-shot' || offline}
+          disabled={codexActive ? !codexCatalog.available || (selectedId === undefined && pendingSession === undefined) : subagentView?.mode === 'one-shot' || offline}
           running={activeRunning}
           busy={busy}
           error={actionError}
           models={activeModels}
-          permissionOptions={codexActive ? [] : permissions?.options ?? []}
-          permission={codexActive ? undefined : permissions?.currentValue}
+          permissionOptions={codexActive ? CODEX_PERMISSION_OPTIONS : permissions?.options ?? []}
+          permission={codexActive ? codexPermission : permissions?.currentValue}
           onModel={(provider, model) => { void handleModel(provider, model) }}
           onEffort={effort => { void handleEffort(effort) }}
           onPermission={preset => { void handlePermission(preset) }}
@@ -1607,7 +1922,7 @@ export function App() {
         <Inspector
           host={host}
           session={selectedForView}
-          workspace={selectedWorkspace}
+          workspace={activeWorkspace}
           models={presentedModels}
           activity={activity}
           skills={skills}
@@ -1620,6 +1935,7 @@ export function App() {
           onClose={() => setInspectorOpen(false)}
           onRefresh={() => {
             void refreshChrome()
+            void refreshCodexCatalog(true)
             if (selectedId !== undefined) void refreshSession(selectedId, { includeModels: true })
           }}
         />
@@ -1648,8 +1964,8 @@ export function App() {
         inspectorOpen={inspectorOpen}
         currentFolder={currentFolder}
         models={presentedModels}
-        permissionOptions={codexActive ? [] : permissions?.options ?? []}
-        permission={codexActive ? undefined : permissions?.currentValue}
+        permissionOptions={codexActive ? CODEX_PERMISSION_OPTIONS : permissions?.options ?? []}
+        permission={codexActive ? codexPermission : permissions?.currentValue}
         busy={busy}
         running={activeRunning}
         currentPreset={selected?.agentPreset}
@@ -1675,6 +1991,7 @@ export function App() {
         onPlugins={openPlugins}
         onRefreshHost={() => {
           void refreshChrome()
+          void refreshCodexCatalog(true)
           if (selectedId !== undefined) void refreshSession(selectedId, { includeModels: true })
         }}
       />
@@ -1688,7 +2005,7 @@ export function App() {
         inspectorOpen={inspectorOpen}
         sidebarExpanded={sidebarExpanded}
         onClose={() => setCommandsOpen(false)}
-        onSession={setSelectedId}
+        onSession={selectSession}
         onWorkspace={workspace => { void handleWorkspace(workspace) }}
         onNew={() => { void handleNew() }}
         onOpenFolder={() => { void handleOpenFolder() }}

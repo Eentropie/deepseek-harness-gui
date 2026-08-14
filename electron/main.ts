@@ -15,7 +15,9 @@ import {
 import WebSocket from 'ws'
 import { PluginController, resolveHostOrigin } from '../server/plugin-control.ts'
 import { CodexAppServer } from './codex-app-server.ts'
+import { DeepSeekBillingService } from './deepseek-billing.ts'
 import { assertDesktopRpcPayload } from './rpc-policy.ts'
+import type { ProviderHandoffMessage } from '../src/lib/types.ts'
 
 type ConnectionState = 'connecting' | 'connected' | 'reconnecting'
 
@@ -291,6 +293,30 @@ function requiredString(value: unknown, label: string): string {
   return value
 }
 
+function requestIdentifier(value: unknown): string | number {
+  if (typeof value !== 'string' && typeof value !== 'number') throw new Error('Codex request identifier is invalid')
+  return value
+}
+
+function optionalHandoffMessages(value: unknown): ProviderHandoffMessage[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.length > 24) throw new Error('Codex handoff context is invalid')
+  let chars = 0
+  const messages = value.map(raw => {
+    const item = object(raw)
+    const role = item['role']
+    const text = requiredString(item['text'], 'Codex handoff text')
+    const seq = item['seq']
+    if ((role !== 'user' && role !== 'assistant') || !Number.isSafeInteger(seq) || (seq as number) < 0) {
+      throw new Error('Codex handoff context is invalid')
+    }
+    chars += text.length
+    return { role: role as ProviderHandoffMessage['role'], text, seq: seq as number }
+  })
+  if (chars > 24_000) throw new Error('Codex handoff context is too large')
+  return messages
+}
+
 type SessionMenuAction =
   | 'toggle-pin'
   | 'rename'
@@ -394,6 +420,7 @@ async function assertCodexWorkspace(sessionId: string, cwd: string): Promise<voi
 function installIpc(
   controller: PluginController,
   codex: CodexAppServer,
+  billing: DeepSeekBillingService,
   downlinks: (event: IpcMainInvokeEvent) => DownlinkClient | undefined,
 ): void {
   ipcMain.handle('dsh:rpc', async (event, method: unknown, payload: unknown) => {
@@ -501,9 +528,26 @@ function installIpc(
     assertTrustedSender(event)
     createMainWindow(requiredString(sessionId, 'sessionId'))
   })
-  ipcMain.handle('dsh:codex-catalog', async event => {
+  ipcMain.handle('dsh:codex-catalog', async (event, refresh: unknown) => {
     assertTrustedSender(event)
-    return codex.catalog()
+    if (refresh !== undefined && typeof refresh !== 'boolean') throw new Error('Codex catalog refresh flag is invalid')
+    return codex.catalog(refresh === true)
+  })
+  ipcMain.handle('dsh:codex-usage', async event => {
+    assertTrustedSender(event)
+    return codex.usage()
+  })
+  ipcMain.handle('dsh:deepseek-billing', async event => {
+    assertTrustedSender(event)
+    return billing.snapshot()
+  })
+  ipcMain.handle('dsh:set-deepseek-billing-key', async (event, value: unknown) => {
+    assertTrustedSender(event)
+    return billing.setKey(requiredString(value, 'DeepSeek API key'))
+  })
+  ipcMain.handle('dsh:remove-deepseek-billing-key', async event => {
+    assertTrustedSender(event)
+    return billing.removeKey()
   })
   ipcMain.handle('dsh:codex-prompt', async (event, raw: unknown) => {
     assertTrustedSender(event)
@@ -517,7 +561,9 @@ function installIpc(
       cwd,
       model: requiredString(payload['model'], 'model'),
       effort: requiredString(payload['effort'], 'effort'),
+      permission: requiredString(payload['permission'], 'permission'),
       prompt: requiredString(payload['prompt'], 'prompt'),
+      ...(payload['context'] === undefined ? {} : { context: optionalHandoffMessages(payload['context']) }),
     })
   })
   ipcMain.handle('dsh:codex-read-thread', async (event, threadId: unknown) => {
@@ -527,6 +573,11 @@ function installIpc(
   ipcMain.handle('dsh:codex-interrupt', async (event, threadId: unknown, turnId: unknown) => {
     assertTrustedSender(event)
     await codex.interrupt(requiredString(threadId, 'threadId'), requiredString(turnId, 'turnId'))
+  })
+  ipcMain.handle('dsh:codex-respond-approval', (event, requestId: unknown, approved: unknown) => {
+    assertTrustedSender(event)
+    if (typeof approved !== 'boolean') throw new Error('Codex approval decision is invalid')
+    codex.respondApproval(requestIdentifier(requestId), approved)
   })
 }
 
@@ -608,12 +659,13 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
   await installAppProtocol()
   const controller = new PluginController()
+  const billing = new DeepSeekBillingService(join(app.getPath('userData'), 'billing-credentials.json'))
   codexServer = new CodexAppServer(event => {
     BrowserWindow.getAllWindows().forEach(window => {
       if (!window.isDestroyed()) window.webContents.send('dsh:codex-event', event)
     })
   })
-  installIpc(controller, codexServer, event => downlinkClients.get(event.sender.id))
+  installIpc(controller, codexServer, billing, event => downlinkClients.get(event.sender.id))
   app.setAsDefaultProtocolClient(APP_SCHEME)
   createMainWindow(pendingDeeplinks.shift())
   pendingDeeplinks.splice(0).forEach(sessionId => createMainWindow(sessionId))

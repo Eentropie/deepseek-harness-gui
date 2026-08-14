@@ -7,8 +7,13 @@ import type {
   CodexEvent,
   CodexPromptResult,
   CodexThreadSnapshot,
+  CodexUsageSnapshot,
+  ProviderHandoffMessage,
 } from '../src/lib/types.ts'
-import { normalizeCodexModels, projectCodexThread } from '../server/codex-protocol.ts'
+import { PROVIDER_HANDOFF_MARKER, providerHandoffText } from '../src/lib/provider-handoff.ts'
+import { codexSpawnEnvironment } from '../server/codex-launch.ts'
+import { codexExecutionPolicy } from '../server/codex-permissions.ts'
+import { normalizeCodexModels, normalizeCodexUsage, projectCodexThread } from '../server/codex-protocol.ts'
 
 interface PendingRequest {
   resolve: (value: unknown) => void
@@ -22,7 +27,9 @@ interface CodexPromptInput {
   cwd: string
   model: string
   effort: string
+  permission: string
   prompt: string
+  context?: ProviderHandoffMessage[]
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -76,15 +83,16 @@ export class CodexAppServer {
   private readonly pending = new Map<string | number, PendingRequest>()
   private readonly loadedThreads = new Set<string>()
   private readonly sessionByThread = new Map<string, string>()
+  private readonly incomingApprovals = new Map<string | number, string>()
   private catalogCache?: CodexCatalogModel[]
   private stopping = false
 
   constructor(private readonly publish: (event: CodexEvent) => void) {}
 
-  async catalog(): Promise<CodexCatalog> {
+  async catalog(refresh = false): Promise<CodexCatalog> {
     try {
       await this.ensureStarted()
-      const models = this.catalogCache ?? await this.loadCatalog()
+      const models = refresh ? await this.loadCatalog() : this.catalogCache ?? await this.loadCatalog()
       return { available: true, authenticatedWith: 'ChatGPT', models }
     } catch (reason) {
       return {
@@ -96,8 +104,29 @@ export class CodexAppServer {
     }
   }
 
+  async usage(): Promise<CodexUsageSnapshot> {
+    try {
+      await this.ensureStarted()
+      const [account, rateLimits, usage] = await Promise.all([
+        this.request('account/read', {}, 30_000),
+        this.request('account/rateLimits/read', null, 30_000),
+        this.request('account/usage/read', null, 30_000).catch(() => ({ summary: {}, dailyUsageBuckets: [] })),
+      ])
+      return normalizeCodexUsage(account, rateLimits, usage)
+    } catch (reason) {
+      return {
+        available: false,
+        rateLimits: [],
+        dailyUsageBuckets: [],
+        updatedAt: Date.now(),
+        error: errorMessage(reason),
+      }
+    }
+  }
+
   async prompt(input: CodexPromptInput): Promise<CodexPromptResult> {
     this.assertPrompt(input)
+    const policy = codexExecutionPolicy(input.permission, input.cwd)
     await this.ensureStarted()
     const models = this.catalogCache ?? await this.loadCatalog()
     const selected = models.find(model => model.id === input.model)
@@ -112,8 +141,9 @@ export class CodexAppServer {
         model: input.model,
         modelProvider: 'openai',
         cwd: input.cwd,
-        approvalPolicy: 'never',
-        sandbox: 'workspace-write',
+        approvalPolicy: policy.approvalPolicy,
+        approvalsReviewer: policy.approvalsReviewer,
+        sandbox: policy.threadSandbox,
         serviceName: 'deepseek_workbench',
         developerInstructions: 'Do not ask the user for interactive input. Make safe, reasonable assumptions and continue within the workspace sandbox.',
       }))
@@ -126,18 +156,32 @@ export class CodexAppServer {
     }
     this.sessionByThread.set(threadId, input.sessionId)
 
+    let prompt = input.prompt
+    if (input.context !== undefined && input.context.length > 0) {
+      try {
+        await this.request('thread/inject_items', {
+          threadId,
+          items: input.context.map(message => ({
+            type: 'message',
+            role: message.role,
+            content: [{
+              type: message.role === 'assistant' ? 'output_text' : 'input_text',
+              text: `${PROVIDER_HANDOFF_MARKER}\nContext transferred from DeepSeek.\n\n${message.text}`,
+            }],
+          })),
+        }, 60_000)
+      } catch {
+        prompt = `${providerHandoffText('DeepSeek', { messages: input.context, omitted: 0 })}\n\n<current_user_message>\n${input.prompt}\n</current_user_message>`
+      }
+    }
+
     const response = record(await this.request('turn/start', {
       threadId,
-      input: [{ type: 'text', text: input.prompt, text_elements: [] }],
+      input: [{ type: 'text', text: prompt, text_elements: [] }],
       cwd: input.cwd,
-      approvalPolicy: 'never',
-      sandboxPolicy: {
-        type: 'workspaceWrite',
-        writableRoots: [input.cwd],
-        networkAccess: true,
-        excludeTmpdirEnvVar: false,
-        excludeSlashTmp: false,
-      },
+      approvalPolicy: policy.approvalPolicy,
+      approvalsReviewer: policy.approvalsReviewer,
+      sandboxPolicy: policy.sandboxPolicy,
       model: input.model,
       effort: input.effort,
       summary: 'auto',
@@ -161,10 +205,19 @@ export class CodexAppServer {
     await this.request('turn/interrupt', { threadId, turnId })
   }
 
+  respondApproval(requestId: string | number, approved: boolean): void {
+    const method = this.incomingApprovals.get(requestId)
+    if (method === undefined) throw new Error('Codex approval request is no longer pending')
+    this.incomingApprovals.delete(requestId)
+    this.respond(requestId, { decision: approved ? 'accept' : 'decline' })
+  }
+
   shutdown(): void {
     this.stopping = true
     this.startPromise = undefined
     this.loadedThreads.clear()
+    for (const requestId of this.incomingApprovals.keys()) this.respond(requestId, { decision: 'decline' })
+    this.incomingApprovals.clear()
     this.rejectPending(new Error('Codex App Server stopped'))
     this.process?.kill('SIGTERM')
     this.process = undefined
@@ -187,7 +240,7 @@ export class CodexAppServer {
     this.stderr = ''
     const child = spawn(executable, ['app-server', '--listen', 'stdio://'], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: process.env,
+      env: codexSpawnEnvironment(executable),
       shell: false,
     })
     this.process = child
@@ -301,15 +354,32 @@ export class CodexAppServer {
       return
     }
     if (id !== undefined && method !== undefined) {
-      this.handleServerRequest(id, method)
+      this.handleServerRequest(id, method, record(message['params']) ?? {})
       return
     }
     if (method !== undefined) this.handleNotification(method, record(message['params']) ?? {})
   }
 
-  private handleServerRequest(id: string | number, method: string): void {
+  private handleServerRequest(id: string | number, method: string, params: Record<string, unknown>): void {
     if (method === 'item/commandExecution/requestApproval' || method === 'item/fileChange/requestApproval') {
-      this.respond(id, { decision: 'decline' })
+      const threadId = string(params['threadId'])
+      const turnId = string(params['turnId'])
+      const command = string(params['command'])
+      const reason = string(params['reason'])
+      this.incomingApprovals.set(id, method)
+      this.publish({
+        type: 'approval-requested',
+        requestId: id,
+        ...(threadId === undefined ? {} : { threadId }),
+        ...(turnId === undefined ? {} : { turnId }),
+        ...(threadId === undefined || this.sessionByThread.get(threadId) === undefined
+          ? {}
+          : { sessionId: this.sessionByThread.get(threadId) }),
+        toolName: command === undefined
+          ? method === 'item/fileChange/requestApproval' ? 'File changes' : 'Command execution'
+          : command.slice(0, 1_000),
+        ...(reason === undefined ? {} : { reason }),
+      })
       return
     }
     if (method === 'applyPatchApproval' || method === 'execCommandApproval') {
@@ -332,6 +402,10 @@ export class CodexAppServer {
   }
 
   private handleNotification(method: string, params: Record<string, unknown>): void {
+    if (method === 'account/rateLimits/updated' || method === 'thread/tokenUsage/updated') {
+      this.publish({ type: 'usage-updated' })
+      return
+    }
     const threadId = string(params['threadId'])
     const turn = record(params['turn'])
     const turnId = string(params['turnId']) ?? string(turn?.['id'])
@@ -387,6 +461,7 @@ export class CodexAppServer {
     this.startPromise = undefined
     this.loadedThreads.clear()
     this.catalogCache = undefined
+    this.incomingApprovals.clear()
     this.rejectPending(reason)
     if (!this.stopping) this.publish({ type: 'error', message: reason.message })
   }
@@ -406,6 +481,18 @@ export class CodexAppServer {
     if (input.model.length === 0 || input.model.length > 160) throw new Error('Codex model id is invalid')
     if (input.effort.length === 0 || input.effort.length > 40) throw new Error('Codex reasoning effort is invalid')
     if (input.prompt.trim() === '' || input.prompt.length > 1_000_000) throw new Error('Codex prompt is invalid')
+    if (input.context !== undefined) {
+      if (input.context.length > 24) throw new Error('Codex handoff context is too large')
+      let contextChars = 0
+      for (const message of input.context) {
+        if ((message.role !== 'user' && message.role !== 'assistant')
+          || message.text.trim() === '' || !Number.isSafeInteger(message.seq) || message.seq < 0) {
+          throw new Error('Codex handoff context is invalid')
+        }
+        contextChars += message.text.length
+      }
+      if (contextChars > 24_000) throw new Error('Codex handoff context is too large')
+    }
   }
 
   private assertIdentifier(value: string, label: string): void {
