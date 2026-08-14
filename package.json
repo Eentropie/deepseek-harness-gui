@@ -1,0 +1,65 @@
+{
+  "name": "deepseek-harness-workbench",
+  "productName": "DeepSeek Workbench",
+  "description": "Standalone macOS workbench for a local DeepSeek Harness Host.",
+  "author": "Local Workbench",
+  "private": false,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist-electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build:renderer": "vite build",
+    "build:desktop": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --format=cjs --target=node22 --external:electron --outdir=dist-electron --out-extension:.js=.cjs",
+    "build": "tsc --noEmit && pnpm build:renderer && pnpm build:desktop",
+    "desktop": "pnpm build && electron .",
+    "pack:mac": "pnpm build && electron-builder --mac dir --arm64",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
+    "ws": "8.21.3"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.1",
+    "@types/node": "22.20.0",
+    "@types/react": "18.3.28",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "4.7.0",
+    "electron": "43.4.0",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.28.2",
+    "typescript": "6.0.3",
+    "vite": "6.4.3",
+    "vitest": "4.1.8"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "build": {
+    "appId": "ai.deepseek.harness.workbench",
+    "productName": "DeepSeek Workbench",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": "dir",
+      "identity": null,
+      "icon": "build/icon.png",
+      "artifactName": "DeepSeek-Workbench-${version}-${arch}.${ext}"
+    }
+  },
+  "packageManager": "pnpm@11.7.0"
+}
