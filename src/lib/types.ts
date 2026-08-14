@@ -416,13 +416,53 @@ export interface AgentPresetOpenResult {
 
 export interface SettingsNamespaceView {
   ns: string
+  schema: unknown
   value: unknown
+  base?: unknown
+  user?: unknown
   applies: 'live' | 'restart'
+  secrets: SettingsSecretView[]
   revision: number
 }
+
+export interface SettingsSecretView {
+  path: string[]
+  set: boolean
+}
+
+export type SettingsPathOpView =
+  | { op: 'set'; path: string[]; value: unknown }
+  | { op: 'unset'; path: string[] }
 
 export interface SettingsDescription {
   writable: boolean
   hasDocument: boolean
   namespaces: SettingsNamespaceView[]
+}
+
+export interface CredentialView {
+  configured: boolean
+  source?: string
+  writable: boolean
+}
+
+export interface ConfigurableProviderView {
+  provider: string
+  displayName: string
+  settingsNs: string
+  settingsPath: string[]
+  active: boolean
+  declared?: boolean
+}
+
+export interface HostModelCatalog {
+  groups: ModelGroup[]
+  failures: Array<{ id: string; name: string; message: string }>
+}
+
+export interface DiscoveredModelView {
+  id: string
+  name?: string
+  contextWindow?: number
+  maxTokens?: number
 }

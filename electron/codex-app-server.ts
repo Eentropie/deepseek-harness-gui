@@ -208,7 +208,7 @@ export class CodexAppServer {
     await this.rawRequest('initialize', {
       clientInfo: {
         name: 'deepseek_workbench',
-        title: 'DeepSeek Workbench',
+        title: 'DeepSeek Harness',
         version: '0.1.0',
       },
     }, 30_000)
@@ -328,7 +328,7 @@ export class CodexAppServer {
       this.respond(id, { contentItems: [], success: false })
       return
     }
-    this.respondError(id, `${method} is not supported by DeepSeek Workbench`)
+    this.respondError(id, `${method} is not supported by DeepSeek Harness`)
   }
 
   private handleNotification(method: string, params: Record<string, unknown>): void {

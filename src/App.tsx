@@ -16,6 +16,7 @@ import {
 import { Sidebar } from './components/Sidebar.tsx'
 import { codexApi, harnessApi, subscribeCodex, subscribeDownlinks } from './lib/api.ts'
 import { frameSessionId, projectActivity, projectConversation, projectQueue } from './lib/history.ts'
+import { chooseGreeting } from './lib/greetings.ts'
 import type {
   GoalProjection,
   HistoryPage,
@@ -45,6 +46,13 @@ type ConnectionState = 'connecting' | 'connected' | 'reconnecting'
 
 const EMPTY_HISTORY: HistoryPage = { events: [], hasMore: false }
 const CODEX_PROVIDER = 'codex-cli'
+const STARTUP_SESSION_ID = new URLSearchParams(window.location.search).get('sessionId') ?? undefined
+const GREETING_STORAGE_KEY = 'dsh-workbench-last-greeting'
+const STARTUP_GREETING = (() => {
+  const greeting = chooseGreeting(new Date(), localStorage.getItem(GREETING_STORAGE_KEY) ?? undefined)
+  localStorage.setItem(GREETING_STORAGE_KEY, greeting)
+  return greeting
+})()
 
 interface CodexSessionState {
   active: boolean
@@ -101,6 +109,15 @@ function storedBoolean(key: string, fallback: boolean): boolean {
   return fallback
 }
 
+function storedStringSet(key: string): Set<string> {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) ?? '[]') as unknown
+    return new Set(Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [])
+  } catch {
+    return new Set()
+  }
+}
+
 function storedThemeMode(): ThemeMode {
   const value = localStorage.getItem('dsh-workbench-theme-mode')
     ?? localStorage.getItem('dsh-workbench-theme')
@@ -127,7 +144,10 @@ export function App() {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
   const [archivedSessionIds, setArchivedSessionIds] = useState<string[]>([])
-  const [selectedId, setSelectedId] = useState<string>()
+  const [selectedId, setSelectedId] = useState<string | undefined>(STARTUP_SESSION_ID)
+  const [pinnedSessionIds, setPinnedSessionIds] = useState(() => storedStringSet('dsh-workbench-pinned-sessions'))
+  const [unreadSessionIds, setUnreadSessionIds] = useState(() => storedStringSet('dsh-workbench-unread-sessions'))
+  const [deletedSessionIds, setDeletedSessionIds] = useState(() => storedStringSet('dsh-workbench-deleted-sessions'))
   const [subagentView, setSubagentView] = useState<{ parentSessionId: string; childSessionId: string; mode: 'one-shot' | 'continuable'; label: string }>()
   const [history, setHistory] = useState<HistoryPage>(EMPTY_HISTORY)
   const [models, setModels] = useState<SessionModels>()
@@ -179,6 +199,16 @@ export function App() {
   const historyGeneration = useRef(0)
   const searchGeneration = useRef(0)
   const dark = themeMode === 'dark' || (themeMode === 'system' && systemDark)
+
+  const selectSession = useCallback((sessionId: string): void => {
+    setSelectedId(sessionId)
+    setUnreadSessionIds(current => {
+      if (!current.has(sessionId)) return current
+      const next = new Set(current)
+      next.delete(sessionId)
+      return next
+    })
+  }, [])
 
   const selected = useMemo(
     () => sessions.find(session => session.sessionId === selectedId),
@@ -255,6 +285,18 @@ export function App() {
     selectedRef.current = selectedId
     if (selectedId !== undefined) localStorage.setItem('dsh-workbench-session', selectedId)
   }, [selectedId])
+
+  useEffect(() => {
+    localStorage.setItem('dsh-workbench-pinned-sessions', JSON.stringify([...pinnedSessionIds]))
+  }, [pinnedSessionIds])
+
+  useEffect(() => {
+    localStorage.setItem('dsh-workbench-unread-sessions', JSON.stringify([...unreadSessionIds]))
+  }, [unreadSessionIds])
+
+  useEffect(() => {
+    localStorage.setItem('dsh-workbench-deleted-sessions', JSON.stringify([...deletedSessionIds]))
+  }, [deletedSessionIds])
 
   useEffect(() => {
     let active = true
@@ -412,7 +454,7 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    document.title = selected === undefined ? 'DeepSeek Workbench' : `${titleOf(selected)} · DeepSeek Workbench`
+    document.title = selected === undefined ? 'DeepSeek Harness' : `${titleOf(selected)} · DeepSeek Harness`
   }, [selected])
 
   const refreshChrome = useCallback(async (signal?: AbortSignal): Promise<void> => {
@@ -429,11 +471,14 @@ export function App() {
       setAppError(undefined)
       setSelectedId(current => {
         if (current !== undefined && sessionPage.items.some(session => session.sessionId === current)
-          && !workspacePage.archivedSessionIds.includes(current)) return current
+          && !deletedSessionIds.has(current)) return current
         const saved = resumeLastSession ? localStorage.getItem('dsh-workbench-session') : null
-        if (saved !== null && sessionPage.items.some(session => session.sessionId === saved)) return saved
-        return sessionPage.items.find(session => !workspacePage.archivedSessionIds.includes(session.sessionId) && !session.blank)?.sessionId
-          ?? sessionPage.items.find(session => !workspacePage.archivedSessionIds.includes(session.sessionId))?.sessionId
+        if (saved !== null && !deletedSessionIds.has(saved)
+          && sessionPage.items.some(session => session.sessionId === saved)) return saved
+        return sessionPage.items.find(session => !deletedSessionIds.has(session.sessionId)
+            && !workspacePage.archivedSessionIds.includes(session.sessionId) && !session.blank)?.sessionId
+          ?? sessionPage.items.find(session => !deletedSessionIds.has(session.sessionId)
+            && !workspacePage.archivedSessionIds.includes(session.sessionId))?.sessionId
       })
     } catch (reason) {
       if (signal?.aborted === true) return
@@ -442,7 +487,7 @@ export function App() {
     } finally {
       if (signal?.aborted !== true) setChromeLoading(false)
     }
-  }, [resumeLastSession])
+  }, [deletedSessionIds, resumeLastSession])
 
   const refreshSession = useCallback(async (
     sessionId: string,
@@ -1022,12 +1067,48 @@ export function App() {
     try {
       await harnessApi.archiveSession(session.sessionId)
       setSubagentView(undefined)
+      if (session.sessionId === selectedId) {
+        setSelectedId(undefined)
+        selectedRef.current = undefined
+      }
       await refreshChrome()
     } catch (reason) {
       setActionError(`会话归档失败：${errorText(reason)}`)
     } finally {
       setBusy(false)
     }
+  }
+
+  const handleDeleteSession = (session: SessionSummary): void => {
+    if (session.running) {
+      setActionError('运行中的会话不能删除，请先停止任务。')
+      return
+    }
+    const confirmed = window.confirm(
+      `从 DeepSeek Harness 删除“${titleOf(session)}”？\n\n`
+      + '该会话会从本应用中移除。由于 Local Harness Host 没有公开删除接口，底层会话日志仍会保留在磁盘上。',
+    )
+    if (!confirmed) return
+    setDeletedSessionIds(current => new Set(current).add(session.sessionId))
+    setPinnedSessionIds(current => {
+      if (!current.has(session.sessionId)) return current
+      const next = new Set(current)
+      next.delete(session.sessionId)
+      return next
+    })
+    setUnreadSessionIds(current => {
+      if (!current.has(session.sessionId)) return current
+      const next = new Set(current)
+      next.delete(session.sessionId)
+      return next
+    })
+    localStorage.removeItem(codexSessionKey(session.sessionId))
+    if (session.sessionId === selectedId) {
+      setSubagentView(undefined)
+      setSelectedId(undefined)
+      selectedRef.current = undefined
+    }
+    setActionError('会话已从 DeepSeek Harness 中删除；Host 原始日志仍保留。')
   }
 
   const handleOpenPath = async (path?: string): Promise<void> => {
@@ -1060,31 +1141,125 @@ export function App() {
     }
   }
 
-  const handleSessionMenu = (session: SessionSummary): void => {
-    const action = window.prompt('Session action: rename / fork / archive / open', 'rename')?.trim().toLocaleLowerCase()
-    if (action === 'rename') void handleRenameSession(session)
-    else if (action === 'fork') void handleForkSession(session)
-    else if (action === 'archive') void handleArchiveSession(session)
-    else if (action === 'open') void handleOpenPath(session.cwd)
+  const handleSessionMenu = async (session: SessionSummary, extended = false): Promise<void> => {
+    const desktop = window.dshDesktop
+    if (desktop === undefined) {
+      setActionError('Session actions are available in the desktop app.')
+      return
+    }
+    const action = await desktop.showSessionMenu({
+      pinned: pinnedSessionIds.has(session.sessionId),
+      unread: unreadSessionIds.has(session.sessionId),
+      archived: archivedSessionIds.includes(session.sessionId),
+      running: session.running,
+      ...(extended ? { extended: true } : {}),
+    })
+    if (action === null) return
+    const workspace = workspaces.find(candidate => candidate.sessionIds.includes(session.sessionId))
+    const directory = workspace?.path ?? session.cwd
+    try {
+      if (action === 'toggle-pin') {
+        setPinnedSessionIds(current => {
+          const next = new Set(current)
+          if (next.has(session.sessionId)) next.delete(session.sessionId)
+          else next.add(session.sessionId)
+          return next
+        })
+      } else if (action === 'rename') {
+        await handleRenameSession(session)
+      } else if (action === 'archive') {
+        await handleArchiveSession(session)
+      } else if (action === 'delete') {
+        handleDeleteSession(session)
+      } else if (action === 'toggle-unread') {
+        setUnreadSessionIds(current => {
+          const next = new Set(current)
+          if (next.has(session.sessionId)) next.delete(session.sessionId)
+          else next.add(session.sessionId)
+          return next
+        })
+      } else if (action === 'reveal') {
+        if (directory === undefined) throw new Error('This session has no working directory')
+        await desktop.revealPath(directory)
+      } else if (action === 'copy-working-directory') {
+        if (directory === undefined) throw new Error('This session has no working directory')
+        await desktop.copyText(directory)
+      } else if (action === 'copy-session-id') {
+        await desktop.copyText(session.sessionId)
+      } else if (action === 'copy-deeplink') {
+        await desktop.copyText(await desktop.sessionDeeplink(session.sessionId))
+      } else if (action === 'fork') {
+        await handleForkSession(session)
+      } else if (action === 'export') {
+        await handleExportSession()
+      } else if (action === 'open-new-window') {
+        await desktop.openSessionWindow(session.sessionId)
+      }
+    } catch (reason) {
+      setActionError(`会话操作失败：${errorText(reason)}`)
+    }
   }
 
-  const handleWorkspaceMenu = (workspace: WorkspaceSummary): void => {
-    const action = window.prompt('Workspace action: rename / delete / open', 'rename')?.trim().toLocaleLowerCase()
-    if (action === 'open') void handleOpenPath(workspace.path)
+  const handleWorkspaceMenu = async (workspace: WorkspaceSummary): Promise<void> => {
+    const desktop = window.dshDesktop
+    if (desktop === undefined) {
+      setActionError('Work-folder actions are available in the desktop app.')
+      return
+    }
+    const action = await desktop.showWorkspaceMenu()
+    if (action === null) return
     if (action === 'rename') {
-      const title = window.prompt('Rename workspace', workspace.title)?.trim()
+      const title = window.prompt('Rename work folder', workspace.title)?.trim()
       if (title === undefined || title === '' || title === workspace.title) return
       setBusy(true)
-      void harnessApi.renameWorkspace(workspace.workspaceId, title).then(() => refreshChrome()).catch(reason => {
+      try {
+        await harnessApi.renameWorkspace(workspace.workspaceId, title)
+        await refreshChrome()
+      } catch (reason) {
         setActionError(`工作区重命名失败：${errorText(reason)}`)
-      }).finally(() => setBusy(false))
+      } finally {
+        setBusy(false)
+      }
+      return
     }
-    if (action === 'delete') {
+    if (action === 'remove') {
       if (!window.confirm(`移除工作区“${workspace.title}”？目录和会话日志不会被删除。`)) return
       setBusy(true)
-      void harnessApi.deleteWorkspace(workspace.workspaceId).then(() => refreshChrome()).catch(reason => {
+      try {
+        await harnessApi.deleteWorkspace(workspace.workspaceId)
+        await refreshChrome()
+      } catch (reason) {
         setActionError(`工作区移除失败：${errorText(reason)}`)
-      }).finally(() => setBusy(false))
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
+    try {
+      if (action === 'reveal') {
+        await desktop.revealPath(workspace.path)
+      } else if (action === 'copy-working-directory') {
+        await desktop.copyText(workspace.path)
+      } else if (action === 'new-session') {
+        setBusy(true)
+        const result = await harnessApi.createSession({ workspaceId: workspace.workspaceId })
+        selectSession(result.sessionId)
+        selectedRef.current = result.sessionId
+        setDraft('')
+        await refreshChrome()
+      } else if (action === 'open-new-window') {
+        const sessionId = workspace.sessionIds
+          .map(id => sessions.find(session => session.sessionId === id))
+          .filter((session): session is SessionSummary => session !== undefined)
+          .sort((left, right) => right.updatedAt - left.updatedAt)[0]?.sessionId
+          ?? (await harnessApi.createSession({ workspaceId: workspace.workspaceId })).sessionId
+        await desktop.openSessionWindow(sessionId)
+        await refreshChrome()
+      }
+    } catch (reason) {
+      setActionError(`工作区操作失败：${errorText(reason)}`)
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -1309,9 +1484,12 @@ export function App() {
         workspaces={workspaces}
         selectedId={selectedId}
         archivedSessionIds={archivedSessionIds}
+        pinnedSessionIds={pinnedSessionIds}
+        unreadSessionIds={unreadSessionIds}
+        deletedSessionIds={deletedSessionIds}
         activeWorkspaceId={selectedWorkspace?.workspaceId}
         collapsed={!sidebarExpanded}
-        onSelect={setSelectedId}
+        onSelect={selectSession}
         onNew={() => { void handleNew() }}
         onOpenFolder={() => { void handleOpenFolder() }}
         onWorkspace={workspace => { void handleWorkspace(workspace) }}
@@ -1323,7 +1501,7 @@ export function App() {
         searching={searching}
         onSearch={handleSearch}
         onSessionMenu={session => { void handleSessionMenu(session) }}
-        onWorkspaceMenu={workspace => { handleWorkspaceMenu(workspace) }}
+        onWorkspaceMenu={workspace => { void handleWorkspaceMenu(workspace) }}
         onMoveWorkspace={(workspaceId, beforeWorkspaceId) => { void handleMoveWorkspace(workspaceId, beforeWorkspaceId) }}
         onMoveSession={(workspaceId, sessionId, beforeSessionId) => { void handleMoveSession(workspaceId, sessionId, beforeSessionId) }}
       />
@@ -1342,17 +1520,13 @@ export function App() {
               <strong>{activeTitle}</strong>
             </div>
           </div>
-          <div className="topbar-center" aria-label="Current view">
-            <button type="button" data-active>Chat</button>
-          </div>
+          <div className="topbar-center" />
           <div className="topbar-right">
             {selected !== undefined && subagentView === undefined && (
               <div className="session-actions">
-                <button type="button" className="icon-button quiet" onClick={() => { void handleRenameSession() }} aria-label="Rename session" title="Rename session"><Icon name="edit" size={14} /></button>
-                <button type="button" className="icon-button quiet" onClick={() => { void handleForkSession() }} aria-label="Fork session" title="Fork session"><Icon name="copy" size={14} /></button>
-                <button type="button" className="icon-button quiet" onClick={() => { void handleOpenPath() }} aria-label="Open work folder" title="Open work folder"><Icon name="folder" size={14} /></button>
-                <button type="button" className="icon-button quiet" onClick={() => { void handleExportSession() }} aria-label="Session log" title="Export session log" disabled={busy}><Icon name="document" size={14} /></button>
-                <button type="button" className="icon-button quiet" onClick={() => { void handleArchiveSession() }} aria-label="Archive session" title="Archive session"><Icon name="trash" size={14} /></button>
+                <button type="button" className="icon-button quiet session-overflow" onClick={() => { void handleSessionMenu(selected, true) }} aria-label="Chat actions" title="Chat actions">
+                  <Icon name="more" size={16} />
+                </button>
               </div>
             )}
             <JobDock jobs={activeJobs} />
@@ -1397,6 +1571,7 @@ export function App() {
           loading={historyLoading || chromeLoading}
           title={activeTitle}
           workspace={currentFolder}
+          greeting={STARTUP_GREETING}
           hasMore={codexActive ? false : history.hasMore}
           loadingOlder={historyLoadingOlder}
           onLoadOlder={() => { void handleLoadOlder() }}

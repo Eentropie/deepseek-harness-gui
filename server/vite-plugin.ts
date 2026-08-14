@@ -60,7 +60,7 @@ export function pluginControlPlugin(): Plugin {
       }
       if (request.method === 'POST' && path === '/workbench/plugins/toggle') {
         if (request.headers['x-dsh-workbench'] !== '1') {
-          throw new PluginControlError(403, '缺少本机 Workbench 请求标记')
+          throw new PluginControlError(403, '缺少本机 DeepSeek Harness 请求标记')
         }
         const body = await readJson(request)
         if (typeof body !== 'object' || body === null) throw new PluginControlError(400, '请求字段无效')

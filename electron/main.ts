@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { readFile, writeFile } from 'node:fs/promises'
-import { extname, join, normalize, relative } from 'node:path'
+import { extname, isAbsolute, join, normalize, relative } from 'node:path'
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
@@ -14,7 +15,7 @@ import {
 import WebSocket from 'ws'
 import { PluginController, resolveHostOrigin } from '../server/plugin-control.ts'
 import { CodexAppServer } from './codex-app-server.ts'
-import { assertPresetRpcPayload } from './rpc-policy.ts'
+import { assertDesktopRpcPayload } from './rpc-policy.ts'
 
 type ConnectionState = 'connecting' | 'connected' | 'reconnecting'
 
@@ -69,7 +70,15 @@ const ALLOWED_RPC_METHODS = new Set([
   'agentPreset.remove',
   'settings.describe',
   'settings.update',
+  'settings.replace',
+  'settings.mutate',
   'settings.openDocument',
+  'credentials.describe',
+  'credentials.set',
+  'credentials.unset',
+  'llm.providers',
+  'llm.models',
+  'llm.discoverModels',
 ])
 
 const MIME_TYPES = new Map([
@@ -115,7 +124,7 @@ function assertTrustedSender(event: IpcMainInvokeEvent): void {
 
 async function hostRpc<T>(method: string, payload: unknown): Promise<T> {
   if (!ALLOWED_RPC_METHODS.has(method)) throw new Error(`Desktop bridge does not allow RPC method ${method}`)
-  assertPresetRpcPayload(method, payload)
+  assertDesktopRpcPayload(method, payload)
   const id = `desktop-${randomUUID()}`
   const response = await fetch(`${HOST_ORIGIN}/api/${method}`, {
     method: 'POST',
@@ -282,6 +291,67 @@ function requiredString(value: unknown, label: string): string {
   return value
 }
 
+type SessionMenuAction =
+  | 'toggle-pin'
+  | 'rename'
+  | 'archive'
+  | 'delete'
+  | 'toggle-unread'
+  | 'reveal'
+  | 'copy-working-directory'
+  | 'copy-session-id'
+  | 'copy-deeplink'
+  | 'fork'
+  | 'export'
+  | 'open-new-window'
+
+type WorkspaceMenuAction =
+  | 'new-session'
+  | 'rename'
+  | 'reveal'
+  | 'copy-working-directory'
+  | 'open-new-window'
+  | 'remove'
+
+function popupActionMenu<T extends string>(
+  event: IpcMainInvokeEvent,
+  items: Array<{ id: T; label: string; enabled?: boolean } | 'separator'>,
+): Promise<T | null> {
+  const parent = BrowserWindow.fromWebContents(event.sender)
+  if (parent === null) return Promise.resolve(null)
+  return new Promise(resolve => {
+    let settled = false
+    const finish = (action: T | null): void => {
+      if (settled) return
+      settled = true
+      resolve(action)
+    }
+    const menu = Menu.buildFromTemplate(items.map(item => item === 'separator'
+      ? { type: 'separator' as const }
+      : {
+          label: item.label,
+          enabled: item.enabled ?? true,
+          click: () => finish(item.id),
+        }))
+    menu.popup({ window: parent, callback: () => finish(null) })
+  })
+}
+
+function sessionDeeplink(sessionId: string): string {
+  return `${APP_SCHEME}://session/${encodeURIComponent(sessionId)}`
+}
+
+function sessionIdFromDeeplink(value: string): string | undefined {
+  try {
+    const target = new URL(value)
+    if (target.protocol !== `${APP_SCHEME}:` || target.hostname !== 'session') return undefined
+    const sessionId = decodeURIComponent(target.pathname.replace(/^\/+/, ''))
+    return sessionId !== '' && sessionId.length <= 1_024 ? sessionId : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function exportFilename(sessionId: string): string {
   const safeId = sessionId.replace(/[^a-zA-Z0-9._-]/g, '-')
   return `dsh-session-${safeId}.zip`
@@ -324,7 +394,7 @@ async function assertCodexWorkspace(sessionId: string, cwd: string): Promise<voi
 function installIpc(
   controller: PluginController,
   codex: CodexAppServer,
-  downlinks: () => DownlinkClient | undefined,
+  downlinks: (event: IpcMainInvokeEvent) => DownlinkClient | undefined,
 ): void {
   ipcMain.handle('dsh:rpc', async (event, method: unknown, payload: unknown) => {
     assertTrustedSender(event)
@@ -351,7 +421,7 @@ function installIpc(
   })
   ipcMain.handle('dsh:connection-state', event => {
     assertTrustedSender(event)
-    return downlinks()?.state() ?? 'connecting'
+    return downlinks(event)?.state() ?? 'connecting'
   })
   ipcMain.handle('dsh:pick-directory', async event => {
     assertTrustedSender(event)
@@ -365,6 +435,71 @@ function installIpc(
       ? await dialog.showOpenDialog(options)
       : await dialog.showOpenDialog(parent, options)
     return result.canceled ? null : result.filePaths[0] ?? null
+  })
+  ipcMain.handle('dsh:show-session-menu', async (event, raw: unknown) => {
+    assertTrustedSender(event)
+    const state = object(raw)
+    if (typeof state['pinned'] !== 'boolean' || typeof state['unread'] !== 'boolean'
+      || typeof state['archived'] !== 'boolean' || typeof state['running'] !== 'boolean'
+      || (state['extended'] !== undefined && typeof state['extended'] !== 'boolean')) {
+      throw new Error('Session menu state is invalid')
+    }
+    const extendedItems: Array<{ id: SessionMenuAction; label: string } | 'separator'> = state['extended'] === true
+      ? [
+          'separator',
+          { id: 'fork', label: 'Fork chat' },
+          { id: 'export', label: 'Export session log…' },
+        ]
+      : []
+    return popupActionMenu<SessionMenuAction>(event, [
+      { id: 'toggle-pin', label: state['pinned'] ? 'Unpin chat' : 'Pin chat' },
+      { id: 'rename', label: 'Rename chat' },
+      ...(state['archived'] === true ? [] : [{ id: 'archive' as const, label: 'Archive chat' }]),
+      { id: 'toggle-unread', label: state['unread'] ? 'Mark as read' : 'Mark as unread' },
+      'separator',
+      { id: 'reveal', label: 'Reveal in Finder' },
+      { id: 'copy-working-directory', label: 'Copy working directory' },
+      { id: 'copy-session-id', label: 'Copy session ID' },
+      { id: 'copy-deeplink', label: 'Copy deeplink' },
+      ...extendedItems,
+      'separator',
+      { id: 'open-new-window', label: 'Open in new window' },
+      'separator',
+      { id: 'delete', label: 'Delete chat…', enabled: state['running'] !== true },
+    ])
+  })
+  ipcMain.handle('dsh:show-workspace-menu', async event => {
+    assertTrustedSender(event)
+    return popupActionMenu<WorkspaceMenuAction>(event, [
+      { id: 'new-session', label: 'New chat' },
+      { id: 'rename', label: 'Rename work folder' },
+      'separator',
+      { id: 'reveal', label: 'Reveal in Finder' },
+      { id: 'copy-working-directory', label: 'Copy working directory' },
+      { id: 'open-new-window', label: 'Open in new window' },
+      'separator',
+      { id: 'remove', label: 'Remove from sidebar' },
+    ])
+  })
+  ipcMain.handle('dsh:reveal-path', (event, value: unknown) => {
+    assertTrustedSender(event)
+    const path = requiredString(value, 'path')
+    if (!isAbsolute(path)) throw new Error('Reveal path must be absolute')
+    shell.showItemInFolder(path)
+  })
+  ipcMain.handle('dsh:copy-text', (event, value: unknown) => {
+    assertTrustedSender(event)
+    const text = requiredString(value, 'text')
+    if (text.length > 16_384) throw new Error('Clipboard text is too long')
+    clipboard.writeText(text)
+  })
+  ipcMain.handle('dsh:session-deeplink', (event, sessionId: unknown) => {
+    assertTrustedSender(event)
+    return sessionDeeplink(requiredString(sessionId, 'sessionId'))
+  })
+  ipcMain.handle('dsh:open-session-window', (event, sessionId: unknown) => {
+    assertTrustedSender(event)
+    createMainWindow(requiredString(sessionId, 'sessionId'))
   })
   ipcMain.handle('dsh:codex-catalog', async event => {
     assertTrustedSender(event)
@@ -395,14 +530,17 @@ function installIpc(
   })
 }
 
-function createMainWindow(): { window: BrowserWindow; downlinks: DownlinkClient } {
+const downlinkClients = new Map<number, DownlinkClient>()
+const pendingDeeplinks: string[] = []
+
+function createMainWindow(initialSessionId?: string): BrowserWindow {
   const window = new BrowserWindow({
     width: 1440,
     height: 930,
     minWidth: 960,
     minHeight: 680,
     show: false,
-    title: 'DeepSeek Workbench',
+    title: 'DeepSeek Harness',
     backgroundColor: '#e7e7e7',
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 15, y: 17 },
@@ -415,6 +553,8 @@ function createMainWindow(): { window: BrowserWindow; downlinks: DownlinkClient 
     },
   })
   const downlinks = new DownlinkClient(window)
+  const webContentsId = window.webContents.id
+  downlinkClients.set(webContentsId, downlinks)
 
   window.webContents.setWindowOpenHandler(({ url }) => {
     try {
@@ -443,42 +583,51 @@ function createMainWindow(): { window: BrowserWindow; downlinks: DownlinkClient 
   })
   window.webContents.on('did-finish-load', () => downlinks.start())
   window.once('ready-to-show', () => window.show())
-  window.on('closed', () => downlinks.stop())
-  void window.loadURL(`${APP_ORIGIN}/index.html`)
+  window.on('closed', () => {
+    downlinks.stop()
+    downlinkClients.delete(webContentsId)
+  })
+  const target = new URL(`${APP_ORIGIN}/index.html`)
+  if (initialSessionId !== undefined) target.searchParams.set('sessionId', initialSessionId)
+  void window.loadURL(target.href)
 
-  return { window, downlinks }
+  return window
 }
 
-let mainWindow: BrowserWindow | undefined
-let downlinkClient: DownlinkClient | undefined
 let codexServer: CodexAppServer | undefined
+
+app.on('open-url', (event, url) => {
+  event.preventDefault()
+  const sessionId = sessionIdFromDeeplink(url)
+  if (sessionId === undefined) return
+  if (app.isReady()) createMainWindow(sessionId)
+  else pendingDeeplinks.push(sessionId)
+})
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
   await installAppProtocol()
   const controller = new PluginController()
   codexServer = new CodexAppServer(event => {
-    if (!mainWindow?.isDestroyed()) mainWindow?.webContents.send('dsh:codex-event', event)
+    BrowserWindow.getAllWindows().forEach(window => {
+      if (!window.isDestroyed()) window.webContents.send('dsh:codex-event', event)
+    })
   })
-  installIpc(controller, codexServer, () => downlinkClient)
-  const created = createMainWindow()
-  mainWindow = created.window
-  downlinkClient = created.downlinks
+  installIpc(controller, codexServer, event => downlinkClients.get(event.sender.id))
+  app.setAsDefaultProtocolClient(APP_SCHEME)
+  createMainWindow(pendingDeeplinks.shift())
+  pendingDeeplinks.splice(0).forEach(sessionId => createMainWindow(sessionId))
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length !== 0) return
-    const next = createMainWindow()
-    mainWindow = next.window
-    downlinkClient = next.downlinks
+    createMainWindow()
   })
 }).catch(reason => {
-  process.stderr.write(`DeepSeek Workbench failed to start: ${reason instanceof Error ? reason.stack : String(reason)}\n`)
+  process.stderr.write(`DeepSeek Harness failed to start: ${reason instanceof Error ? reason.stack : String(reason)}\n`)
   app.quit()
 })
 
 app.on('window-all-closed', () => {
-  mainWindow = undefined
-  downlinkClient = undefined
   if (process.platform !== 'darwin') app.quit()
 })
 

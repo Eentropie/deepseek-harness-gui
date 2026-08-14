@@ -2,13 +2,15 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Icon, type IconName } from './Icon.tsx'
 import { WhaleLogo } from './WhaleLogo.tsx'
 import { AgentPresetsSettings } from './AgentPresetsSettings.tsx'
+import { HarnessSettings } from './HarnessSettings.tsx'
+import { ModelsCredentialsSettings } from './ModelsCredentialsSettings.tsx'
 import type { HostDescription, PermissionOption, PluginControlSnapshot, SessionModels } from '../lib/types.ts'
 
 export type ThemeMode = 'system' | 'light' | 'dark'
 export type InterfaceDensity = 'comfortable' | 'compact'
 export type LocalFontStatus = 'checking' | 'pair' | 'sans' | 'fallback'
 
-type SettingsSection = 'general' | 'appearance' | 'model' | 'presets' | 'plugins' | 'host' | 'shortcuts' | 'about'
+type SettingsSection = 'general' | 'appearance' | 'model' | 'providers' | 'presets' | 'plugins' | 'harness' | 'host' | 'shortcuts' | 'about'
 
 interface SettingsPanelProps {
   open: boolean
@@ -49,13 +51,15 @@ interface SettingsPanelProps {
   onRefreshHost: () => void
 }
 
-const sections: Array<{ id: SettingsSection; label: string; icon: IconName }> = [
+const sections: Array<{ id: SettingsSection; label: string; icon: IconName | 'whale' }> = [
   { id: 'general', label: 'General', icon: 'settings' },
   { id: 'appearance', label: 'Appearance', icon: 'sun' },
   { id: 'model', label: 'Model & permissions', icon: 'brain' },
+  { id: 'providers', label: 'Models & credentials', icon: 'key' },
   { id: 'presets', label: 'Agent presets', icon: 'agent' },
   { id: 'plugins', label: 'Plugins', icon: 'plug' },
-  { id: 'host', label: 'Local Host', icon: 'terminal' },
+  { id: 'harness', label: 'Harness settings', icon: 'sliders' },
+  { id: 'host', label: 'Local Host', icon: 'whale' },
   { id: 'shortcuts', label: 'Shortcuts', icon: 'sparkles' },
   { id: 'about', label: 'About', icon: 'activity' },
 ]
@@ -191,7 +195,7 @@ export function SettingsPanel({
       <section className="settings-window" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <header className="settings-header">
           <div className="settings-title-mark"><Icon name="settings" size={18} /></div>
-          <div><p>DEEPSEEK WORKBENCH</p><h2 id="settings-title">Settings</h2></div>
+          <div><p>DEEPSEEK HARNESS</p><h2 id="settings-title">Settings</h2></div>
           <span>Changes save automatically</span>
           <button type="button" className="icon-button quiet" onClick={onClose} aria-label="Close Settings"><Icon name="x" size={15} /></button>
         </header>
@@ -200,7 +204,7 @@ export function SettingsPanel({
           <nav className="settings-nav" aria-label="Settings sections">
             {sections.map(item => (
               <button type="button" key={item.id} data-active={section === item.id} onClick={() => setSection(item.id)}>
-                <Icon name={item.icon} size={15} /><span>{item.label}</span>
+                {item.icon === 'whale' ? <WhaleLogo size={16} /> : <Icon name={item.icon} size={15} />}<span>{item.label}</span>
               </button>
             ))}
           </nav>
@@ -208,7 +212,7 @@ export function SettingsPanel({
           <div className="settings-content">
             {section === 'general' && (
               <section className="settings-page">
-                <div className="settings-page-heading"><p>WORKBENCH</p><h3>General</h3><span>Startup, workspace, and window behavior.</span></div>
+                <div className="settings-page-heading"><p>HARNESS</p><h3>General</h3><span>Startup, workspace, and window behavior.</span></div>
                 <div className="settings-card">
                   <Row title="Resume last session" detail="Reopen the last selected Harness session on launch.">
                     <Toggle checked={resumeLastSession} label="Resume last session" onChange={onResumeLastSession} />
@@ -313,6 +317,14 @@ export function SettingsPanel({
               </section>
             )}
 
+            {section === 'providers' && (
+              <ModelsCredentialsSettings active={open && section === 'providers'} />
+            )}
+
+            {section === 'harness' && (
+              <HarnessSettings active={open && section === 'harness'} />
+            )}
+
             {section === 'presets' && (
               <AgentPresetsSettings
                 active={open && section === 'presets'}
@@ -326,7 +338,7 @@ export function SettingsPanel({
               <section className="settings-page">
                 <div className="settings-page-heading"><p>RUNTIME</p><h3>Local Host</h3><span>The endpoint remains fixed to the unmodified local Harness Host.</span></div>
                 <div className="settings-host-card">
-                  <div className="settings-host-icon"><Icon name="terminal" size={18} /></div>
+                  <div className="settings-host-icon"><WhaleLogo size={24} /></div>
                   <div><strong>127.0.0.1:3080</strong><span>{offline ? 'Offline' : connection === 'connected' ? 'Connected locally' : connection}</span></div>
                   <i data-state={offline ? 'offline' : connection} />
                 </div>
@@ -352,7 +364,7 @@ export function SettingsPanel({
                 <div className="settings-page-heading"><p>LOCAL DESKTOP CLIENT</p><h3>About</h3><span>Independent companion UI for DeepSeek Harness.</span></div>
                 <div className="settings-about">
                   <div className="settings-about-whale"><WhaleLogo size={38} /></div>
-                  <div><strong>DeepSeek Workbench</strong><span>Version 0.1.0 · macOS arm64</span></div>
+                  <div><strong>DeepSeek Harness</strong><span>Version 0.1.0 · macOS arm64</span></div>
                 </div>
                 <div className="settings-card">
                   <Row title="Host source" detail="The upstream repository and localhost UI are not modified."><span className="settings-state">Untouched</span></Row>

@@ -6,8 +6,12 @@ import type {
   CodexEvent,
   CodexPromptResult,
   CodexThreadSnapshot,
+  ConfigurableProviderView,
+  CredentialView,
+  DiscoveredModelView,
   DownlinkFrame,
   HistoryPage,
+  HostModelCatalog,
   HostDescription,
   ImageAttachmentRef,
   ImageLimits,
@@ -23,6 +27,7 @@ import type {
   SkillEntry,
   SettingsDescription,
   SettingsNamespaceView,
+  SettingsPathOpView,
   SubagentCatalog,
   SubagentEntry,
   WorkspaceSummary,
@@ -250,6 +255,18 @@ export const harnessApi = {
     rpc<Record<string, never>>('agentPreset.remove', { agentPreset }),
   describeSettings: (signal?: AbortSignal) =>
     rpc<SettingsDescription>('settings.describe', {}, signal),
+  mutateSettings: (ns: string, ops: SettingsPathOpView[], expectedRevision?: number) =>
+    rpc<SettingsNamespaceView>('settings.mutate', {
+      ns,
+      ops,
+      ...(expectedRevision === undefined ? {} : { expectedRevision }),
+    }),
+  replaceSettings: (ns: string, section: object, expectedRevision?: number) =>
+    rpc<SettingsNamespaceView>('settings.replace', {
+      ns,
+      section,
+      ...(expectedRevision === undefined ? {} : { expectedRevision }),
+    }),
   updateAgentPresetDefault: (agentPreset: string, expectedRevision?: number) =>
     rpc<SettingsNamespaceView>('settings.update', {
       ns: 'agent-presets',
@@ -258,6 +275,23 @@ export const harnessApi = {
     }),
   openSettingsDocument: () =>
     rpc<{ opened: true }>('settings.openDocument', {}),
+  describeCredentials: (refs: string[]) =>
+    rpc<{ credentials: Record<string, CredentialView> }>('credentials.describe', { refs }),
+  setCredential: (ref: string, value: string) =>
+    rpc<Record<string, never>>('credentials.set', { ref, value }),
+  unsetCredential: (ref: string) =>
+    rpc<Record<string, never>>('credentials.unset', { ref }),
+  llmProviders: (signal?: AbortSignal) =>
+    rpc<{ providers: ConfigurableProviderView[] }>('llm.providers', {}, signal),
+  llmModels: (signal?: AbortSignal) =>
+    rpc<HostModelCatalog>('llm.models', {}, signal),
+  discoverModels: (payload: {
+    settingsNs: string
+    provider?: string
+    baseURL?: string
+    api?: string
+    apiKey?: string
+  }) => rpc<{ models: DiscoveredModelView[] }>('llm.discoverModels', payload),
   prompt: (sessionId: string, content: PromptContentPart[]) => rpc<{ accepted: true }>('session.prompt', {
     sessionId,
     mode: 'queue',

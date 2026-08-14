@@ -1,11 +1,12 @@
-# DeepSeek Workbench
+# DeepSeek Harness
 
-DeepSeek Workbench is a standalone macOS desktop GUI for a local DeepSeek Harness Host. It keeps the upstream Harness repository and its original `http://127.0.0.1:3080` web interface unchanged.
+DeepSeek Harness is a standalone macOS desktop GUI for a local DeepSeek Harness Host. It keeps the upstream Harness repository and its original `http://127.0.0.1:3080` web interface unchanged.
 
 ## What is included
 
 - Local desktop window with no browser dependency
 - Work-folder and session switcher
+- Native workspace/session menus, drag reordering, pin/unread state, and a collapsed Archived section
 - Native macOS folder picker
 - Command palette and keyboard shortcuts
 - Model, reasoning-effort, and permission controls
@@ -30,7 +31,7 @@ corepack pnpm dsh web
 Then open the desktop application:
 
 ```sh
-open "release/mac-arm64/DeepSeek Workbench.app"
+open "release/mac-arm64/DeepSeek Harness.app"
 ```
 
 The desktop app talks only to the local Host at `127.0.0.1:3080`. It does not replace or patch that Host.
@@ -49,6 +50,14 @@ Changing the model or reasoning effort takes effect on the next turn and does no
 ## Work folders
 
 Choose **Open folder…** in the sidebar or press `Command-O`. The native folder picker registers the selected path as a Harness workspace and opens its most recent session. If the folder has no session yet, the app creates one blank session. Click any folder heading in the sidebar, or use `Command-K`, to switch later.
+
+## Session management
+
+Right-click a session, double-click it, or use the chat `…` menu for native actions such as pin, rename, archive, mark unread, reveal/copy workspace details, fork, export, open in a new window, and delete.
+
+Archived sessions appear in the collapsed **Archived** group at the bottom of the sidebar. **Delete chat…** removes a session from this desktop client after confirmation, but the current Harness Host has no permanent session-delete API, so its underlying Host log remains on disk. Deletion is disabled while the session is running.
+
+For the exact Host parity boundary and recommended next features, see [HOST_CAPABILITY_AUDIT.md](./HOST_CAPABILITY_AUDIT.md).
 
 ## Plugin manager
 
@@ -86,12 +95,16 @@ Choose **Settings**, click the gear button, select it from `Command-K`, or press
 - **General:** resume the last session, choose the default sidebar and inspector state, and open or switch the current work folder.
 - **Appearance:** follow the macOS theme or force light/dark mode, select comfortable/compact density, enable Serif assistant responses, and reduce motion.
 - **Model & permissions:** choose the active session model, reasoning effort, and permission preset.
+- **Models & credentials:** inspect every Host provider route, activate additional adapters, safely set or remove write-only API keys, override endpoints, and discover advertised models without changing configuration.
+- **Harness settings:** edit every namespace exposed by the live redacted Host schema with per-field reset, revision checks, and restart/live-apply labels.
 - **Agent presets:** choose the default session composition and manage safe copy-only custom presets.
 - **Plugins:** inspect live enabled/controllable counts and open the full plugin manager.
 - **Local Host:** see connection, version, and working-directory information and reconnect to the fixed local Host.
 - **Shortcuts / About:** review keyboard controls, architecture, signing, and security boundaries.
 
 The Appearance page reports whether both local font families are active and includes a live Serif sample, so the typography source is directly visible rather than inferred from styling.
+
+Stored credentials are never read into the renderer. The Host returns only whether a named credential is configured, its source, and whether it is writable; replacement values travel one way through the restricted desktop bridge.
 
 ## Shortcuts
 
@@ -116,7 +129,7 @@ corepack pnpm test
 corepack pnpm pack:mac
 ```
 
-The output is `release/mac-arm64/DeepSeek Workbench.app`.
+The output is `release/mac-arm64/DeepSeek Harness.app`.
 
 This local build is not signed with an Apple Developer certificate. If macOS quarantines a copied build, Control-click the app and choose **Open** once. Do not disable Gatekeeper globally.
 

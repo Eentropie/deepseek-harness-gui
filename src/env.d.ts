@@ -10,6 +10,8 @@ import type {
 } from './lib/types.ts'
 
 type DesktopConnectionState = 'connecting' | 'connected' | 'reconnecting'
+type SessionMenuAction = 'toggle-pin' | 'rename' | 'archive' | 'delete' | 'toggle-unread' | 'reveal' | 'copy-working-directory' | 'copy-session-id' | 'copy-deeplink' | 'fork' | 'export' | 'open-new-window'
+type WorkspaceMenuAction = 'new-session' | 'rename' | 'reveal' | 'copy-working-directory' | 'open-new-window' | 'remove'
 
 interface DeepSeekDesktopBridge {
   readonly runtime: 'electron'
@@ -17,6 +19,12 @@ interface DeepSeekDesktopBridge {
   plugins: () => Promise<PluginControlSnapshot>
   togglePlugin: (entryId: string, enabled: boolean) => Promise<PluginToggleResult>
   pickDirectory: () => Promise<string | null>
+  showSessionMenu: (state: { pinned: boolean; unread: boolean; archived: boolean; running: boolean; extended?: boolean }) => Promise<SessionMenuAction | null>
+  showWorkspaceMenu: () => Promise<WorkspaceMenuAction | null>
+  revealPath: (path: string) => Promise<void>
+  copyText: (text: string) => Promise<void>
+  sessionDeeplink: (sessionId: string) => Promise<string>
+  openSessionWindow: (sessionId: string) => Promise<void>
   respond: (rpcId: string, result: unknown) => Promise<{ accepted: boolean; reason?: string }>
   exportSession: (sessionId: string, includeDescendants: boolean) => Promise<SessionExportResult>
   codexCatalog: () => Promise<CodexCatalog>

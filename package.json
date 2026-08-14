@@ -1,8 +1,8 @@
 {
   "name": "deepseek-harness-workbench",
-  "productName": "DeepSeek Workbench",
-  "description": "Standalone macOS workbench for a local DeepSeek Harness Host.",
-  "author": "Local Workbench",
+  "productName": "DeepSeek Harness",
+  "description": "Standalone macOS desktop client for a local DeepSeek Harness Host.",
+  "author": "Local Harness",
   "private": false,
   "version": "0.1.0",
   "type": "module",
@@ -43,7 +43,7 @@
   },
   "build": {
     "appId": "ai.deepseek.harness.workbench",
-    "productName": "DeepSeek Workbench",
+    "productName": "DeepSeek Harness",
     "asar": true,
     "directories": {
       "output": "release"
@@ -53,12 +53,18 @@
       "dist-electron/**/*",
       "package.json"
     ],
+    "protocols": [
+      {
+        "name": "DeepSeek Harness session",
+        "schemes": ["dsh-workbench"]
+      }
+    ],
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": "dir",
       "identity": null,
       "icon": "build/icon.png",
-      "artifactName": "DeepSeek-Workbench-${version}-${arch}.${ext}"
+      "artifactName": "DeepSeek-Harness-${version}-${arch}.${ext}"
     }
   },
   "packageManager": "pnpm@11.7.0"

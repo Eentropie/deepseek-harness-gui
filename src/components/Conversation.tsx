@@ -11,6 +11,7 @@ interface ConversationProps {
   workspace?: string
   hasMore: boolean
   loadingOlder: boolean
+  greeting: string
   onLoadOlder: () => void
   onUseSuggestion: (prompt: string) => void
 }
@@ -102,15 +103,17 @@ const suggestions = [
   { icon: 'brain' as const, title: 'Plan a change', prompt: '请先分析当前代码库，并为下一项最值得做的改进给出可执行计划。' },
 ]
 
-function EmptyConversation({ workspace, onUseSuggestion }: Pick<ConversationProps, 'workspace' | 'onUseSuggestion'>) {
+function EmptyConversation({ workspace, greeting, onUseSuggestion }: Pick<ConversationProps, 'workspace' | 'greeting' | 'onUseSuggestion'>) {
   return (
     <div className="empty-conversation">
-      <div className="hero-whale"><WhaleLogo size={46} /></div>
-      <p className="eyebrow">DEEPSEEK WORKBENCH</p>
-      <h1>What would you like to build?</h1>
-      <p className="hero-subtitle">
-        {workspace === undefined ? 'Connected to your local Harness.' : `Working in ${workspace}.`}
-      </p>
+      <div className="empty-hero">
+        <div className="hero-whale"><WhaleLogo size={62} /></div>
+        <p className="eyebrow">DEEPSEEK HARNESS</p>
+        <h1>{greeting}</h1>
+        <p className="hero-subtitle">
+          {workspace === undefined ? 'Connected to your local Harness.' : `Working in ${workspace}.`}
+        </p>
+      </div>
       <div className="suggestion-grid">
         {suggestions.map(suggestion => (
           <button type="button" key={suggestion.title} onClick={() => onUseSuggestion(suggestion.prompt)}>
@@ -124,7 +127,7 @@ function EmptyConversation({ workspace, onUseSuggestion }: Pick<ConversationProp
   )
 }
 
-export function Conversation({ messages, loading, workspace, hasMore, loadingOlder, onLoadOlder, onUseSuggestion }: ConversationProps) {
+export function Conversation({ messages, loading, workspace, hasMore, loadingOlder, greeting, onLoadOlder, onUseSuggestion }: ConversationProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const lastId = messages.at(-1)?.id
   const lastBlockSize = messages.at(-1)?.blocks.reduce((size, block) =>
@@ -144,7 +147,7 @@ export function Conversation({ messages, loading, workspace, hasMore, loadingOld
           <span /><span /><span />
         </div>
       ) : messages.length === 0 ? (
-        <EmptyConversation workspace={workspace} onUseSuggestion={onUseSuggestion} />
+        <EmptyConversation workspace={workspace} greeting={greeting} onUseSuggestion={onUseSuggestion} />
       ) : (
         <div className="conversation-thread">
           {hasMore && (
