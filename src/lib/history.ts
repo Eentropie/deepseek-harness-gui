@@ -352,7 +352,8 @@ export function applyLiveProjection(current: HistoryPage, key: string, value: un
 export function conversationMessagesEqual(left: ConversationMessage, right: ConversationMessage): boolean {
   if (left === right) return true
   if (left.id !== right.id || left.seq !== right.seq || left.time !== right.time || left.role !== right.role
-    || left.agent !== right.agent || left.streaming !== right.streaming || left.blocks.length !== right.blocks.length) return false
+    || left.agent !== right.agent || left.streaming !== right.streaming || left.transient !== right.transient
+    || left.blocks.length !== right.blocks.length) return false
   const blocksEqual = (leftBlocks: MessageBlock[], rightBlocks: MessageBlock[]): boolean => leftBlocks.length === rightBlocks.length && leftBlocks.every((block, index) => {
     const other = rightBlocks[index]
     if (other === undefined || block.kind !== other.kind) return false

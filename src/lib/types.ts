@@ -302,6 +302,7 @@ export interface ConversationMessage {
   blocks: MessageBlock[]
   agent?: 'DeepSeek' | 'Codex'
   streaming?: boolean
+  transient?: 'agent-starting'
   streamAssistantItemId?: string
   streamReasoningItemId?: string
   usage?: unknown

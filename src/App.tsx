@@ -32,6 +32,12 @@ import {
   mergeProviderTranscripts,
   providerHandoffText,
 } from './lib/provider-handoff.ts'
+import {
+  createPendingTurn,
+  pendingTurnMessages,
+  pendingTurnReconciled,
+  type PendingTurnTransition,
+} from './lib/pending-turn.ts'
 import { TrailingTask } from './lib/trailing-task.ts'
 import type {
   GoalProjection,
@@ -71,6 +77,12 @@ const CODEX_PERMISSION_OPTIONS: PermissionOption[] = [
   { value: 'approve-for-me', name: 'Approve for me', description: 'Route approval requests to the Codex automatic reviewer.' },
   { value: 'full-access', name: 'Full access', description: 'Run without approval prompts or filesystem sandboxing.' },
 ]
+const HOST_PERMISSION_OPTIONS: PermissionOption[] = [
+  { value: 'read-only', name: 'Read only', description: 'Allow inspection without writing workspace files.' },
+  { value: 'workspace-write', name: 'Write in workspace', description: 'Allow changes inside the selected workspace.' },
+  { value: 'danger-full-access', name: 'Full access', description: 'Run without the workspace filesystem sandbox.' },
+]
+const DEFAULT_HOST_PERMISSION = 'workspace-write'
 const STARTUP_SESSION_ID = new URLSearchParams(window.location.search).get('sessionId') ?? undefined
 const GREETING_STORAGE_KEY = 'dsh-workbench-last-greeting'
 const DRAFT_STORAGE_KEY = 'dsh-workbench-session-drafts'
@@ -225,6 +237,9 @@ export function App() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyLoadingOlder, setHistoryLoadingOlder] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [conversationScrollRequest, setConversationScrollRequest] = useState(0)
+  const [pendingTurns, setPendingTurns] = useState<Record<string, PendingTurnTransition>>({})
+  const [pendingHostPermission, setPendingHostPermission] = useState(DEFAULT_HOST_PERMISSION)
   const [drafts, setDrafts] = useState<Record<string, string>>(storedDrafts)
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const [queueBySession, setQueueBySession] = useState<Record<string, QueueItem[]>>({})
@@ -344,6 +359,21 @@ export function App() {
       : messages,
     [messages, retainedCodexMessages, retainedDeepSeekMessages, subagentView],
   )
+  const conversationOwner = subagentView?.childSessionId ?? selectedId ?? pendingSession?.key ?? draftKey
+  const pendingTurn = pendingTurns[conversationOwner]
+  const smoothMessages = useMemo(() => pendingTurn === undefined
+    ? unifiedMessages
+    : [...unifiedMessages, ...pendingTurnMessages(pendingTurn, messages)],
+  [messages, pendingTurn, unifiedMessages])
+
+  useEffect(() => {
+    if (pendingTurn === undefined || !pendingTurnReconciled(pendingTurn, messages)) return
+    setPendingTurns(current => {
+      if (current[conversationOwner]?.id !== pendingTurn.id) return current
+      const { [conversationOwner]: _settled, ...rest } = current
+      return rest
+    })
+  }, [conversationOwner, messages, pendingTurn])
   const activity = useMemo(() => projectActivity(history.events), [history.events])
   const projectionValues = history.projections?.values ?? selected?.projections?.values
   const permissions = projectionValues?.permissions
@@ -399,6 +429,12 @@ export function App() {
   }, [codexCatalog, codexSession, models])
   const codexActive = subagentView === undefined && presentedModels?.current.provider === CODEX_PROVIDER
   const codexPermission = codexSession.permission ?? DEFAULT_CODEX_PERMISSION
+  const presentedPermissionOptions = codexActive
+    ? CODEX_PERMISSION_OPTIONS
+    : permissions?.options ?? (pendingSession === undefined ? [] : HOST_PERMISSION_OPTIONS)
+  const presentedPermission = codexActive
+    ? codexPermission
+    : permissions?.currentValue ?? (pendingSession === undefined ? undefined : pendingHostPermission)
 
   const refreshCodexCatalog = useCallback(async (force = false): Promise<void> => {
     try {
@@ -431,11 +467,14 @@ export function App() {
   }, [deletedSessionIds])
 
   useEffect(() => {
-    try {
-      localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(Object.fromEntries(Object.entries(drafts).slice(-60))))
-    } catch {
-      // Keep drafts in memory if local storage is temporarily full or unavailable.
-    }
+    const timer = window.setTimeout(() => {
+      try {
+        localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(Object.fromEntries(Object.entries(drafts).slice(-60))))
+      } catch {
+        // Keep drafts in memory if local storage is temporarily full or unavailable.
+      }
+    }, 320)
+    return () => window.clearTimeout(timer)
   }, [drafts])
 
   useEffect(() => {
@@ -907,6 +946,7 @@ export function App() {
     setSelectedId(undefined)
     selectedRef.current = undefined
     setSubagentView(undefined)
+    setPendingHostPermission(DEFAULT_HOST_PERMISSION)
     setActionError(undefined)
     return key
   }, [host?.cwd, pendingWorkspace, selectedWorkspace, workspaces])
@@ -921,6 +961,12 @@ export function App() {
       },
     )
     if (pendingSession !== undefined) {
+      setPendingTurns(current => {
+        const candidate = current[pendingSession.key]
+        if (candidate === undefined) return current
+        const { [pendingSession.key]: _pendingTurn, ...rest } = current
+        return { ...rest, [result.sessionId]: { ...candidate, owner: result.sessionId } }
+      })
       setDrafts(current => {
         const text = current[pendingSession.key]
         const { [pendingSession.key]: _pendingDraft, ...rest } = current
@@ -1065,12 +1111,40 @@ export function App() {
     if ((prompt === '' && attachments.length === 0) || busy) return
     const tailBeforeSend = historyRef.current.events.at(-1)?.event.seq
     const sourceDraftKey = draftKey
+    const sourceOwner = subagentView?.childSessionId ?? selectedId ?? sourceDraftKey
+    const submittedAttachments = attachments
     const wasPending = pendingSession !== undefined
     const pendingModel = presentedModels?.current
+    const pendingPermission = wasPending ? pendingHostPermission : undefined
+    const transition = codexActive
+      ? undefined
+      : createPendingTurn(sourceOwner, prompt, submittedAttachments, tailBeforeSend ?? -1)
+    setConversationScrollRequest(current => current + 1)
+    let restoreDraftKey = sourceDraftKey
+    if (transition !== undefined) {
+      setPendingTurns(current => ({ ...current, [sourceOwner]: transition }))
+      setDrafts(current => {
+        const { [sourceDraftKey]: _submitted, ...rest } = current
+        return rest
+      })
+      setAttachments([])
+    }
     setBusy(true)
     setActionError(undefined)
     try {
       const sessionId = selectedId ?? await createSession()
+      if (wasPending) restoreDraftKey = sessionId
+      if (transition !== undefined) {
+        const targetOwner = subagentView?.childSessionId ?? sessionId
+        if (targetOwner !== sourceOwner) {
+          setPendingTurns(current => {
+            const candidate = current[sourceOwner]
+            if (candidate?.id !== transition.id) return current
+            const { [sourceOwner]: _source, ...rest } = current
+            return { ...rest, [targetOwner]: { ...candidate, owner: targetOwner } }
+          })
+        }
+      }
       if (codexActive) {
         if (attachments.length > 0) throw new Error('Codex CLI 当前只接受文本输入')
         const current = presentedModels?.current
@@ -1119,6 +1193,9 @@ export function App() {
       if (wasPending && pendingModel !== undefined && pendingModel.provider !== CODEX_PROVIDER) {
         await harnessApi.selectModel(sessionId, pendingModel.provider, pendingModel.model, pendingModel.reasoningEffort)
       }
+      if (pendingPermission !== undefined) {
+        await harnessApi.setPermission(sessionId, pendingPermission)
+      }
       if (subagentView !== undefined) {
         if (subagentView.mode !== 'continuable') throw new Error('One-shot subagent 不能继续发送消息')
         if (attachments.length > 0) throw new Error('子代理会话暂不支持图片')
@@ -1139,14 +1216,9 @@ export function App() {
           writeCodexSession(sessionId, next)
         }
       }
-      setDrafts(current => {
-        const nextDrafts = { ...current }
-        delete nextDrafts[sourceDraftKey]
-        delete nextDrafts[sessionId]
-        return nextDrafts
-      })
-      releaseAttachments(attachments)
-      setAttachments([])
+      releaseAttachments(submittedAttachments)
+      const submittedIds = new Set(submittedAttachments.map(item => item.id))
+      setAttachments(current => current.filter(item => !submittedIds.has(item.id)))
       void refreshChrome()
       window.setTimeout(() => {
         if (selectedRef.current !== sessionId) return
@@ -1160,6 +1232,22 @@ export function App() {
       if (codexActive) {
         setCodexRunning(false)
         setCodexTurnId(undefined)
+      }
+      if (transition !== undefined) {
+        setPendingTurns(current => Object.fromEntries(
+          Object.entries(current).filter(([, item]) => item.id !== transition.id),
+        ))
+        if (prompt !== '') {
+          setDrafts(current => {
+            const currentDraft = current[restoreDraftKey] ?? ''
+            const restored = currentDraft === '' ? prompt : `${prompt}\n\n${currentDraft}`
+            return { ...current, [restoreDraftKey]: restored }
+          })
+        }
+        setAttachments(current => {
+          const existing = new Set(current.map(item => item.id))
+          return [...submittedAttachments.filter(item => !existing.has(item.id)), ...current]
+        })
       }
       setActionError(`发送失败：${errorText(reason)}`)
     } finally {
@@ -1286,7 +1374,14 @@ export function App() {
       setActionError(undefined)
       return
     }
-    if (selectedId === undefined) return
+    if (!presentedPermissionOptions.some(option => option.value === preset)) return
+    if (selectedId === undefined) {
+      if (preset === pendingHostPermission) return
+      if (preset === 'danger-full-access' && !window.confirm('切换到 Full access 会取消文件沙箱限制。确定继续吗？')) return
+      setPendingHostPermission(preset)
+      setActionError(undefined)
+      return
+    }
     if (preset === permissions?.currentValue) return
     if (preset === 'danger-full-access' && !window.confirm('切换到 danger-full-access 会取消文件沙箱限制。确定继续吗？')) return
     setBusy(true)
@@ -1782,7 +1877,7 @@ export function App() {
 
   const currentFolder = activeWorkspace?.title ?? basename(pendingSession?.cwd) ?? basename(selected?.cwd) ?? basename(host?.cwd) ?? 'Local workspace'
   const offline = host === undefined && !chromeLoading
-  const activeMessages = unifiedMessages
+  const activeMessages = smoothMessages
   const activeRunning = subagentView !== undefined
     ? activeSubagent?.activity === 'running'
     : codexRunning || selected?.running === true
@@ -1884,6 +1979,8 @@ export function App() {
         <Conversation
           messages={activeMessages}
           loading={historyLoading || chromeLoading}
+          running={activeRunning}
+          scrollToBottomRequest={conversationScrollRequest}
           title={activeTitle}
           workspace={currentFolder}
           greeting={STARTUP_GREETING}
@@ -1903,8 +2000,8 @@ export function App() {
           busy={busy}
           error={actionError}
           models={activeModels}
-          permissionOptions={codexActive ? CODEX_PERMISSION_OPTIONS : permissions?.options ?? []}
-          permission={codexActive ? codexPermission : permissions?.currentValue}
+          permissionOptions={presentedPermissionOptions}
+          permission={presentedPermission}
           onModel={(provider, model) => { void handleModel(provider, model) }}
           onEffort={effort => { void handleEffort(effort) }}
           onPermission={preset => { void handlePermission(preset) }}
@@ -1964,8 +2061,8 @@ export function App() {
         inspectorOpen={inspectorOpen}
         currentFolder={currentFolder}
         models={presentedModels}
-        permissionOptions={codexActive ? CODEX_PERMISSION_OPTIONS : permissions?.options ?? []}
-        permission={codexActive ? codexPermission : permissions?.currentValue}
+        permissionOptions={presentedPermissionOptions}
+        permission={presentedPermission}
         busy={busy}
         running={activeRunning}
         currentPreset={selected?.agentPreset}

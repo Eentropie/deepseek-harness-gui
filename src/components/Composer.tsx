@@ -89,7 +89,8 @@ export function Composer({
             onAddFiles(images)
           }}
           onKeyDown={event => {
-            if (event.key !== 'Enter' || event.shiftKey || composing.current) return
+            if (event.key !== 'Enter' || event.shiftKey) return
+            if (event.nativeEvent.isComposing || composing.current || event.keyCode === 229) return
             event.preventDefault()
             if (canSend) onSend()
           }}

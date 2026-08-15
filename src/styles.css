@@ -1260,7 +1260,7 @@ a:focus-visible {
   min-height: 0;
   flex: 1;
   overflow: auto;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
 }
 
 .conversation-thread {
@@ -5476,6 +5476,183 @@ a:focus-visible {
   transition: color 150ms ease;
 }
 
+.thought-glyph {
+  position: relative;
+  width: 20px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  isolation: isolate;
+  color: var(--ink-soft);
+  transform: scale(0.96);
+  transition: color 180ms ease, transform 240ms var(--motion-settle);
+}
+
+.thought-glyph > svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.thought-glyph::after {
+  position: absolute;
+  inset: 5px;
+  z-index: -1;
+  border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+  border-radius: 50%;
+  content: '';
+  opacity: 0;
+  transform: scale(0.5);
+}
+
+.thought-wave {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.55;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 17 7;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.thought-wave-upper {
+  opacity: 0.92;
+}
+
+.thought-wave-lower {
+  opacity: 0.52;
+}
+
+.thought-core {
+  fill: currentColor;
+  transform-box: fill-box;
+  transform-origin: center;
+  filter: drop-shadow(0 0 2px color-mix(in srgb, currentColor 32%, transparent));
+}
+
+.thought-title {
+  min-width: 0;
+}
+
+.agent-starting {
+  position: relative;
+  min-height: 48px;
+  padding: 9px 11px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--ink) 18%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-soft) 78%, transparent);
+  box-shadow: 0 5px 18px color-mix(in srgb, #000 6%, transparent);
+  animation: deepseek-agent-start-in 220ms var(--motion-settle) both;
+}
+
+.agent-starting::after {
+  position: absolute;
+  inset: 0;
+  width: 42%;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--ink) 7%, transparent), transparent);
+  content: '';
+  pointer-events: none;
+  transform: translateX(-130%) skewX(-14deg);
+  animation: deepseek-agent-shimmer 1.8s ease-in-out infinite;
+}
+
+.agent-starting-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.agent-starting-copy strong {
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.agent-starting-copy span {
+  color: var(--muted-2);
+  font-size: 9.5px;
+}
+
+.agent-starting-dots {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.agent-starting-dots i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: deepseek-agent-dot 900ms ease-in-out infinite;
+}
+
+.agent-starting-dots i:nth-child(2) { animation-delay: 120ms; }
+.agent-starting-dots i:nth-child(3) { animation-delay: 240ms; }
+
+.thought-live {
+  padding: 2px 5px;
+  border: 1px solid color-mix(in srgb, var(--ink) 18%, var(--border));
+  border-radius: 999px;
+  color: var(--ink-soft);
+  background: color-mix(in srgb, var(--surface-raised) 72%, transparent);
+  font-size: 7px;
+  font-weight: 760;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  animation: deepseek-thought-live 1.25s ease-in-out infinite;
+}
+
+.reasoning-block[data-active='true'] {
+  border-color: color-mix(in srgb, var(--ink) 24%, var(--border));
+  background: linear-gradient(
+    104deg,
+    color-mix(in srgb, var(--surface-soft) 84%, transparent) 12%,
+    color-mix(in srgb, var(--ink) 7%, var(--surface-soft)) 42%,
+    color-mix(in srgb, var(--surface-soft) 84%, transparent) 72%
+  );
+  background-size: 220% 100%;
+  box-shadow: 0 5px 18px color-mix(in srgb, #000 7%, transparent);
+  animation: deepseek-thought-current 2.4s ease-in-out infinite;
+}
+
+.thought-glyph[data-active='true'] {
+  color: var(--ink);
+  transform: scale(1.1);
+}
+
+.thought-glyph[data-active='true']::after {
+  animation: deepseek-tide-ripple 1.4s ease-out infinite;
+}
+
+.thought-glyph[data-active='true'] .thought-wave-upper {
+  animation: deepseek-tide-flow-forward 1.05s linear infinite;
+}
+
+.thought-glyph[data-active='true'] .thought-wave-lower {
+  opacity: 0.72;
+  animation: deepseek-tide-flow-backward 1.35s linear infinite;
+}
+
+.thought-glyph[data-active='true'] .thought-core {
+  animation: deepseek-tide-core 0.95s ease-in-out infinite;
+}
+
+.reasoning-block[open] .thought-glyph {
+  transform: scale(1.07);
+}
+
+.reasoning-block[open] .thought-glyph[data-active='true'] {
+  transform: scale(1.1);
+}
+
 .reasoning-block summary::after {
   margin-left: auto;
   color: var(--muted-2);
@@ -5652,6 +5829,46 @@ a:focus-visible {
 
 @keyframes deepseek-thought-in {
   from { opacity: 0; transform: translateY(-4px) scaleY(0.97); }
+}
+
+@keyframes deepseek-agent-start-in {
+  from { opacity: 0; transform: translateY(5px) scale(0.992); }
+}
+
+@keyframes deepseek-agent-shimmer {
+  58%, 100% { transform: translateX(340%) skewX(-14deg); }
+}
+
+@keyframes deepseek-agent-dot {
+  45% { opacity: 0.34; transform: translateY(-2px); }
+}
+
+@keyframes deepseek-tide-flow-forward {
+  50% { transform: translateY(-0.7px) scaleY(1.08); }
+  to { stroke-dashoffset: -48; }
+}
+
+@keyframes deepseek-tide-flow-backward {
+  50% { transform: translateY(0.7px) scaleY(0.92); }
+  to { stroke-dashoffset: 48; }
+}
+
+@keyframes deepseek-tide-core {
+  50% { opacity: 0.48; transform: scale(0.68); }
+}
+
+@keyframes deepseek-tide-ripple {
+  0% { opacity: 0.34; transform: scale(0.5); }
+  78%, 100% { opacity: 0; transform: scale(2.15); }
+}
+
+@keyframes deepseek-thought-live {
+  50% { opacity: 0.48; }
+}
+
+@keyframes deepseek-thought-current {
+  0%, 100% { background-position: 100% 50%; }
+  50% { background-position: 0% 50%; }
 }
 
 @keyframes deepseek-process-item-in {
