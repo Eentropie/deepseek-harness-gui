@@ -17,6 +17,7 @@ import {
   valueAt,
 } from '../lib/settings-schema.ts'
 import { Icon } from './Icon.tsx'
+import { isAppLocale, useI18n } from '../lib/i18n.tsx'
 
 const namespaceNames: Record<string, string> = {
   'ui-onboarding': 'Onboarding',
@@ -46,6 +47,11 @@ function fieldDescription(path: readonly string[], node: SerializedSchemaNode): 
   return meta === '' ? wire : `${wire} · ${meta}`
 }
 
+export function choiceDraft(encoded: string, choices: unknown[]): string {
+  const values = choices.map(choice => JSON.stringify(choice))
+  return values.includes(encoded) ? encoded : values[0] ?? encoded
+}
+
 function SettingField({
   view,
   schema,
@@ -61,19 +67,42 @@ function SettingField({
   writable: boolean
   onMutate: (ops: SettingsPathOpView[]) => Promise<void>
 }) {
+  const { setLocale, tr } = useI18n()
   const choices = useMemo(() => constChoices(schema, node), [node, schema])
   const secret = view.secrets.find(slot => samePath(slot.path, path))
   const effective = secret === undefined ? valueAt(view.value, path) ?? node.meta?.default : undefined
   const overridden = secret?.set === true || hasAt(view.user, path)
-  const encoded = secret === undefined ? encodeSettingValue(effective, node) : ''
+  const encoded = secret === undefined
+    ? choiceDraft(encodeSettingValue(effective, node), choices)
+    : ''
   const [draft, setDraft] = useState(encoded)
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string>()
 
   useEffect(() => {
-    setDraft(secret === undefined ? encodeSettingValue(effective, node) : '')
+    setDraft(secret === undefined ? choiceDraft(encodeSettingValue(effective, node), choices) : '')
     setFailure(undefined)
-  }, [node, secret, view.revision, effective])
+  }, [choices, node, secret, view.revision, effective])
+
+  const instantLocale = view.ns === 'locale' && choices.length > 0
+
+  const changeChoice = (next: string): void => {
+    setDraft(next)
+    if (!instantLocale) return
+    setBusy(true)
+    setFailure(undefined)
+    void (async () => {
+      try {
+        const value = parseSettingValue(next, node, choices)
+        if (typeof value === 'string' && isAppLocale(value)) setLocale(value)
+        await onMutate([{ op: 'set', path, value }])
+      } catch (reason) {
+        setFailure(errorText(reason))
+      } finally {
+        setBusy(false)
+      }
+    })()
+  }
 
   const save = async (): Promise<void> => {
     setBusy(true)
@@ -121,7 +150,7 @@ function SettingField({
           <code>{JSON.stringify(node.value)}</code>
         ) : choices.length > 0 ? (
           <label className="settings-select host-setting-input">
-            <select value={draft} disabled={!writable || busy} onChange={event => setDraft(event.target.value)}>
+            <select value={draft} disabled={!writable || busy} onChange={event => changeChoice(event.target.value)}>
               {choices.map(choice => {
                 const value = JSON.stringify(choice)
                 return <option key={value} value={value}>{String(choice)}</option>
@@ -159,14 +188,14 @@ function SettingField({
             onChange={event => setDraft(event.target.value)}
           />
         )}
-        {node.type !== 'const' && (
+        {node.type !== 'const' && !instantLocale && (
           <div className="host-setting-actions">
             <button type="button" className="settings-button primary" disabled={!writable || busy} onClick={() => { void save() }}>
-              {busy ? 'Saving…' : 'Save'}
+              {busy ? tr('Saving…', '正在保存…') : tr('Save', '保存')}
             </button>
             {overridden && (
               <button type="button" className="settings-button" disabled={!writable || busy} onClick={() => { void reset() }}>
-                Reset
+                {tr('Reset', '重置')}
               </button>
             )}
           </div>

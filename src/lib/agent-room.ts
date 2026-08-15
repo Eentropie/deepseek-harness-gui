@@ -1,4 +1,4 @@
-import type { ModelGroup, NetworkMode, SessionModels } from './types.ts'
+import type { ConversationMessage, ModelGroup, NetworkMode, SessionModels } from './types.ts'
 
 export const AGENT_ROOM_STORAGE_PREFIX = 'dsh-workbench-agent-room-v1:'
 export const AGENT_ROOM_OWNER_PREFIX = 'agent-room:'
@@ -16,12 +16,20 @@ export interface AgentRoomAgent {
   model: string
   effort?: string
   permission: string
+  effectivePermission?: string
   network: NetworkMode
   role: AgentRoomRole
   hostSessionId?: string
   codexThreadId?: string
   runtimeCwd?: string
   isolated?: boolean
+}
+
+export interface AgentRoomContextSnapshot {
+  workflowId: string
+  sourceSessionId: string
+  capturedAt: number
+  transcript: string
 }
 
 export interface AgentRoomArtifact {
@@ -43,6 +51,8 @@ export interface AgentRoomSnapshot {
   running: boolean
   artifacts: AgentRoomArtifact[]
   finalOutput?: string
+  context?: AgentRoomContextSnapshot
+  reportStatus?: 'pending' | 'delivered'
   updatedAt: number
 }
 
@@ -108,6 +118,7 @@ function normalizeAgent(value: unknown): AgentRoomAgent | undefined {
     provider,
     model,
     permission,
+    ...(typeof row['effectivePermission'] === 'string' ? { effectivePermission: row['effectivePermission'].slice(0, 64) } : {}),
     role: role as AgentRoomRole,
     network: network as NetworkMode,
     ...(typeof row['effort'] === 'string' ? { effort: row['effort'].slice(0, 64) } : {}),
@@ -116,6 +127,16 @@ function normalizeAgent(value: unknown): AgentRoomAgent | undefined {
     ...(typeof row['runtimeCwd'] === 'string' ? { runtimeCwd: row['runtimeCwd'].slice(0, 4_096) } : {}),
     ...(row['isolated'] === true ? { isolated: true } : {}),
   }
+}
+
+function normalizeContext(value: unknown): AgentRoomContextSnapshot | undefined {
+  const row = record(value)
+  const workflowId = text(row?.['workflowId'], 128)
+  const sourceSessionId = text(row?.['sourceSessionId'], 256)
+  const capturedAt = finite(row?.['capturedAt'])
+  const transcript = text(row?.['transcript'], 24_000)
+  if (workflowId === undefined || sourceSessionId === undefined || capturedAt === undefined || transcript === undefined) return undefined
+  return { workflowId, sourceSessionId, capturedAt, transcript }
 }
 
 function normalizeArtifact(value: unknown): AgentRoomArtifact | undefined {
@@ -160,6 +181,8 @@ export function normalizeAgentRoom(value: unknown): AgentRoomSnapshot {
     running: false,
     artifacts,
     ...(text(row['finalOutput']) === undefined ? {} : { finalOutput: text(row['finalOutput']) }),
+    ...(normalizeContext(row['context']) === undefined ? {} : { context: normalizeContext(row['context']) }),
+    ...(row['reportStatus'] === 'pending' || row['reportStatus'] === 'delivered' ? { reportStatus: row['reportStatus'] } : {}),
     updatedAt: finite(row['updatedAt']) ?? 0,
   }
 }
@@ -182,7 +205,7 @@ export function configuredAgentGroups(models?: SessionModels): ModelGroup[] {
   return models.groups.filter(group => group.models.length > 0 && !failed.has(group.id))
 }
 
-export function agentPermissionChoices(provider: string): AgentPermissionChoice[] {
+export function agentPermissionChoices(provider: string, hostPermission = 'workspace-write'): AgentPermissionChoice[] {
   if (provider === AGENT_ROOM_CODEX_PROVIDER) {
     return [
       { value: 'read-only', name: 'Read only', description: 'Audit without modifying files.', isolated: false },
@@ -192,10 +215,54 @@ export function agentPermissionChoices(provider: string): AgentPermissionChoice[
     ]
   }
   return [
-    { value: 'read-only', name: 'Read only', description: 'Audit without modifying files.', isolated: false },
-    { value: 'workspace-write', name: 'Write in worktree', description: 'Edit an isolated Git worktree.', isolated: true },
-    { value: 'danger-full-access', name: 'Full access in worktree', description: 'Start in an isolated worktree with unrestricted tools.', isolated: true },
+    {
+      value: hostPermission,
+      name: `Host effective · ${hostPermission}`,
+      description: 'DeepSeek uses the permission currently reported by the unmodified Local Host. This desktop client does not claim a permission change that the Host did not apply.',
+      isolated: false,
+    },
   ]
+}
+
+export function defaultAgentRoomAgents(groups: ModelGroup[], hostPermission: string): AgentRoomAgent[] {
+  const candidates = groups.flatMap(group => group.models.map(model => ({ group, model })))
+  if (candidates.length === 0) return []
+  const distinct = [
+    candidates[0],
+    candidates.find(candidate => candidate.group.id !== candidates[0]?.group.id) ?? candidates[1] ?? candidates[0],
+  ].filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== undefined)
+  const judge = candidates.find(candidate => candidate.group.id === AGENT_ROOM_CODEX_PROVIDER)
+    ?? candidates.find(candidate => !distinct.includes(candidate))
+    ?? distinct[0]
+  const specs: Array<{ candidate: NonNullable<typeof candidates[number]>; role: AgentRoomRole; label: string }> = [
+    { candidate: distinct[0]!, role: 'reviewer', label: 'Primary reviewer' },
+    { candidate: distinct[1]!, role: 'challenger', label: 'Adversarial challenger' },
+    { candidate: judge!, role: 'judge', label: 'Evidence judge' },
+  ]
+  return specs.map(({ candidate, role, label }) => ({
+    id: crypto.randomUUID(),
+    label,
+    provider: candidate.group.id,
+    model: candidate.model.id,
+    ...(candidate.model.reasoning?.defaultEffort === undefined ? {} : { effort: candidate.model.reasoning.defaultEffort }),
+    permission: candidate.group.id === AGENT_ROOM_CODEX_PROVIDER ? 'read-only' : hostPermission,
+    effectivePermission: candidate.group.id === AGENT_ROOM_CODEX_PROVIDER ? 'read-only' : hostPermission,
+    network: 'auto',
+    role,
+  }))
+}
+
+export function buildAgentRoomContext(sourceSessionId: string, messages: ConversationMessage[]): AgentRoomContextSnapshot {
+  const lines = messages.slice(-18).flatMap(message => {
+    const body = message.blocks.flatMap(block => block.kind === 'text' ? [block.text.trim()] : []).filter(Boolean).join('\n')
+    return body === '' ? [] : [`${message.role === 'user' ? 'User' : 'Assistant'}:\n${body}`]
+  })
+  return {
+    workflowId: `room-${crypto.randomUUID()}`,
+    sourceSessionId,
+    capturedAt: Date.now(),
+    transcript: compactArtifact(lines.join('\n\n'), 20_000),
+  }
 }
 
 export function agentRoomOwnerId(parentSessionId: string, agentId: string): string {
@@ -227,7 +294,12 @@ export function roleInstruction(role: AgentRoomRole): string {
   return 'Act as a rigorous code reviewer. Prioritize correctness, security, regressions, and missing tests with concrete evidence.'
 }
 
-export function independentAuditPrompt(task: string, agent: AgentRoomAgent): string {
+function contextBlock(context?: AgentRoomContextSnapshot): string[] {
+  if (context === undefined || context.transcript.trim() === '') return []
+  return ['', '<frozen_parent_context>', context.transcript, '</frozen_parent_context>']
+}
+
+export function independentAuditPrompt(task: string, agent: AgentRoomAgent, context?: AgentRoomContextSnapshot): string {
   return [
     '[Agent Room · Independent audit]',
     roleInstruction(agent.role),
@@ -236,6 +308,27 @@ export function independentAuditPrompt(task: string, agent: AgentRoomAgent): str
     '<audit_task>',
     task.trim(),
     '</audit_task>',
+    ...contextBlock(context),
+  ].join('\n')
+}
+
+export function roomFollowupPrompt(task: string, question: string, agent: AgentRoomAgent, verdict?: string, context?: AgentRoomContextSnapshot): string {
+  return [
+    '[Agent Room · Follow-up]',
+    roleInstruction(agent.role),
+    'Answer the follow-up against the frozen parent context and prior verdict. State whether it changes the audit conclusion.',
+    '', '<audit_task>', task.trim(), '</audit_task>',
+    '', '<follow_up>', question.trim(), '</follow_up>',
+    ...(verdict === undefined ? [] : ['', '<prior_verdict>', compactArtifact(verdict, 8_000), '</prior_verdict>']),
+    ...contextBlock(context),
+  ].join('\n')
+}
+
+export function agentRoomReport(room: AgentRoomSnapshot): string {
+  return [
+    `[Agent Room report · ${room.context?.workflowId ?? 'manual'}]`,
+    'This is a structured result returned by the desktop Agent Room. Treat it as review evidence, not as a user-authored claim.',
+    '', 'Task:', room.task.trim(), '', 'Judge verdict:', room.finalOutput?.trim() ?? 'No verdict was produced.',
   ].join('\n')
 }
 

@@ -451,7 +451,7 @@ export interface ProviderHandoffMessage {
   seq: number
 }
 
-export type CodexPermissionMode = 'ask-for-approval' | 'approve-for-me' | 'full-access'
+export type CodexPermissionMode = 'read-only' | 'ask-for-approval' | 'approve-for-me' | 'full-access'
 export type CodexApprovalDecision = 'accept' | 'acceptForSession' | 'decline'
 
 export type NetworkMode = 'off' | 'auto' | 'ask'

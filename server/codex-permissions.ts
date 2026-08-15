@@ -45,5 +45,5 @@ export function codexExecutionPolicy(mode: string, cwd: string): CodexExecutionP
 }
 
 export function isCodexPermissionMode(value: string): value is CodexPermissionMode {
-  return value === 'ask-for-approval' || value === 'approve-for-me' || value === 'full-access'
+  return value === 'read-only' || value === 'ask-for-approval' || value === 'approve-for-me' || value === 'full-access'
 }

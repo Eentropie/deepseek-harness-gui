@@ -7,13 +7,14 @@ import { AgentPresetsSettings } from './AgentPresetsSettings.tsx'
 import { HarnessSettings } from './HarnessSettings.tsx'
 import { ModelsCredentialsSettings } from './ModelsCredentialsSettings.tsx'
 import { UsageBillingSettings } from './UsageBillingSettings.tsx'
-import type { HostDescription, PermissionOption, PluginControlSnapshot, SessionModels } from '../lib/types.ts'
+import type { HostDescription, PermissionOption, PluginControlSnapshot, SessionModels, SessionSummary } from '../lib/types.ts'
+import { useI18n } from '../lib/i18n.tsx'
 
 export type ThemeMode = 'system' | 'light' | 'dark'
 export type InterfaceDensity = 'comfortable' | 'compact'
 export type LocalFontStatus = 'checking' | 'pair' | 'sans' | 'fallback'
 
-type SettingsSection = 'general' | 'appearance' | 'model' | 'usage' | 'providers' | 'presets' | 'plugins' | 'harness' | 'host' | 'shortcuts' | 'about'
+type SettingsSection = 'general' | 'appearance' | 'model' | 'usage' | 'providers' | 'presets' | 'plugins' | 'harness' | 'archived' | 'host' | 'shortcuts' | 'about'
 
 interface SettingsPanelProps {
   open: boolean
@@ -37,6 +38,8 @@ interface SettingsPanelProps {
   connection: 'connecting' | 'connected' | 'reconnecting'
   offline: boolean
   fontStatus: LocalFontStatus
+  archivedSessions: SessionSummary[]
+  effectivePermission?: string
   onClose: () => void
   onThemeMode: (mode: ThemeMode) => void
   onDensity: (density: InterfaceDensity) => void
@@ -52,21 +55,29 @@ interface SettingsPanelProps {
   onCreatorPresetDraft: () => void
   onPlugins: () => void
   onRefreshHost: () => void
+  onArchivedSession: (sessionId: string) => void
+  onArchivedMenu: (session: SessionSummary) => void
 }
 
-const sections: Array<{ id: SettingsSection; label: string; icon: IconName | 'whale' }> = [
-  { id: 'general', label: 'General', icon: 'settings' },
-  { id: 'appearance', label: 'Appearance', icon: 'sun' },
-  { id: 'model', label: 'Model & permissions', icon: 'brain' },
-  { id: 'usage', label: 'Usage & billing', icon: 'activity' },
-  { id: 'providers', label: 'Models & credentials', icon: 'key' },
-  { id: 'presets', label: 'Agent presets', icon: 'agent' },
-  { id: 'plugins', label: 'Plugins', icon: 'plug' },
-  { id: 'harness', label: 'Harness settings', icon: 'sliders' },
-  { id: 'host', label: 'Local Host', icon: 'whale' },
-  { id: 'shortcuts', label: 'Shortcuts', icon: 'sparkles' },
-  { id: 'about', label: 'About', icon: 'activity' },
+const sections: Array<{ id: SettingsSection; label: [string, string]; icon: IconName | 'whale' }> = [
+  { id: 'general', label: ['General', '通用'], icon: 'settings' },
+  { id: 'appearance', label: ['Appearance', '外观'], icon: 'sun' },
+  { id: 'model', label: ['Model & permissions', '模型与权限'], icon: 'brain' },
+  { id: 'usage', label: ['Usage & billing', '用量与计费'], icon: 'activity' },
+  { id: 'providers', label: ['Models & credentials', '模型与凭据'], icon: 'key' },
+  { id: 'presets', label: ['Agent presets', 'Agent 预设'], icon: 'agent' },
+  { id: 'plugins', label: ['Plugins', '插件'], icon: 'plug' },
+  { id: 'harness', label: ['Harness settings', 'Harness 设置'], icon: 'sliders' },
+  { id: 'archived', label: ['Archived chats', '已归档对话'], icon: 'archive' },
+  { id: 'host', label: ['Local Host', '本地 Host'], icon: 'whale' },
+  { id: 'shortcuts', label: ['Shortcuts', '快捷键'], icon: 'sparkles' },
+  { id: 'about', label: ['About', '关于'], icon: 'activity' },
 ]
+
+function archivedTitle(session: SessionSummary): string {
+  const title = session.projections?.values.title
+  return typeof title === 'string' && title.trim() !== '' ? title : 'New session'
+}
 
 function Toggle({ checked, label, disabled = false, onChange }: {
   checked: boolean
@@ -129,6 +140,17 @@ function platformShortcuts(): string[][] {
   ]
 }
 
+function codexPermissionDetail(
+  running: boolean,
+  effective: string | undefined,
+  selected: string | undefined,
+  tr: (english: string, chinese: string) => string,
+): string {
+  if (!running || effective === undefined) return tr('Controls approval routing and sandbox access for the selected provider.', '控制所选来源的审批路由与沙箱访问。')
+  if (effective === selected) return `${tr('Current turn effective permission', '本轮实际权限')} · ${effective}`
+  return `${tr('Current turn', '本轮')} · ${effective} · ${tr('Next turn', '下一轮')} · ${selected ?? '—'}`
+}
+
 export function SettingsPanel({
   open,
   themeMode,
@@ -151,6 +173,8 @@ export function SettingsPanel({
   connection,
   offline,
   fontStatus,
+  archivedSessions,
+  effectivePermission,
   onClose,
   onThemeMode,
   onDensity,
@@ -166,7 +190,10 @@ export function SettingsPanel({
   onCreatorPresetDraft,
   onPlugins,
   onRefreshHost,
+  onArchivedSession,
+  onArchivedMenu,
 }: SettingsPanelProps) {
+  const { locale, setLocale, tr } = useI18n()
   const [section, setSection] = useState<SettingsSection>('general')
   const currentModel = useMemo(() => models?.groups
     .flatMap(group => group.models.map(model => ({ ...model, provider: group.id })))
@@ -205,16 +232,16 @@ export function SettingsPanel({
       <section className="settings-window" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <header className="settings-header">
           <div className="settings-title-mark"><Icon name="settings" size={18} /></div>
-          <div><p>DEEPSEEK HARNESS</p><h2 id="settings-title">Settings</h2></div>
-          <span>Changes save automatically</span>
-          <button type="button" className="icon-button quiet" onClick={onClose} aria-label="Close Settings"><Icon name="x" size={15} /></button>
+          <div><p>DEEPSEEK HARNESS</p><h2 id="settings-title">{tr('Settings', '设置')}</h2></div>
+          <span>{tr('Changes save automatically', '更改会自动保存')}</span>
+          <button type="button" className="icon-button quiet" onClick={onClose} aria-label={tr('Close Settings', '关闭设置')}><Icon name="x" size={15} /></button>
         </header>
 
         <div className="settings-body">
           <nav className="settings-nav" aria-label="Settings sections">
             {sections.map(item => (
               <button type="button" key={item.id} data-active={section === item.id} onClick={() => setSection(item.id)}>
-                {item.icon === 'whale' ? <WhaleLogo size={16} /> : <Icon name={item.icon} size={15} />}<span>{item.label}</span>
+                {item.icon === 'whale' ? <WhaleLogo size={16} /> : <Icon name={item.icon} size={15} />}<span>{tr(item.label[0], item.label[1])}</span>
               </button>
             ))}
           </nav>
@@ -222,21 +249,24 @@ export function SettingsPanel({
           <div className="settings-content">
             {section === 'general' && (
               <section className="settings-page">
-                <div className="settings-page-heading"><p>HARNESS</p><h3>General</h3><span>Startup, workspace, and window behavior.</span></div>
+                <div className="settings-page-heading"><p>HARNESS</p><h3>{tr('General', '通用')}</h3><span>{tr('Startup, workspace, and window behavior.', '启动、工作区与窗口行为。')}</span></div>
                 <div className="settings-card">
-                  <Row title="Resume last session" detail="Reopen the last selected Harness session on launch.">
-                    <Toggle checked={resumeLastSession} label="Resume last session" onChange={onResumeLastSession} />
+                  <Row title={tr('Interface language', '界面语言')} detail={tr('Switch immediately without restarting the app.', '无需重启，立即切换中英文界面。')}>
+                    <Segmented value={locale} label={tr('Interface language', '界面语言')} values={[{ value: 'en', label: 'English' }, { value: 'zh', label: '中文' }]} onChange={setLocale} />
                   </Row>
-                  <Row title="Sidebar" detail="Show work folders and sessions by default.">
-                    <Toggle checked={sidebarExpanded} label="Show sidebar" onChange={onSidebar} />
+                  <Row title={tr('Resume last session', '恢复上次会话')} detail={tr('Reopen the last selected Harness session on launch.', '启动时重新打开上次选择的 Harness 会话。')}>
+                    <Toggle checked={resumeLastSession} label={tr('Resume last session', '恢复上次会话')} onChange={onResumeLastSession} />
                   </Row>
-                  <Row title="Context inspector" detail="Show runtime, token, session, and activity details.">
-                    <Toggle checked={inspectorOpen} label="Show context inspector" onChange={onInspector} />
+                  <Row title={tr('Sidebar', '侧边栏')} detail={tr('Show work folders and sessions by default.', '默认显示工作文件夹与会话。')}>
+                    <Toggle checked={sidebarExpanded} label={tr('Show sidebar', '显示侧边栏')} onChange={onSidebar} />
+                  </Row>
+                  <Row title={tr('Context inspector', '上下文检查器')} detail={tr('Show runtime, token, session, and activity details.', '显示运行时、Token、会话和活动详情。')}>
+                    <Toggle checked={inspectorOpen} label={tr('Show context inspector', '显示上下文检查器')} onChange={onInspector} />
                   </Row>
                 </div>
                 <div className="settings-card">
-                  <Row title="Current work folder" detail={currentFolder}>
-                    <button type="button" className="settings-button" onClick={onOpenFolder}><Icon name="folder-plus" size={14} />Open folder…</button>
+                  <Row title={tr('Current work folder', '当前工作文件夹')} detail={currentFolder}>
+                    <button type="button" className="settings-button" onClick={onOpenFolder}><Icon name="folder-plus" size={14} />{tr('Open folder…', '打开文件夹…')}</button>
                   </Row>
                 </div>
               </section>
@@ -244,29 +274,29 @@ export function SettingsPanel({
 
             {section === 'appearance' && (
               <section className="settings-page">
-                <div className="settings-page-heading"><p>INTERFACE</p><h3>Appearance</h3><span>Theme mode, density, typography, and motion.</span></div>
+                <div className="settings-page-heading"><p>INTERFACE</p><h3>{tr('Appearance', '外观')}</h3><span>{tr('Theme mode, density, typography, and motion.', '主题、密度、字体与动效。')}</span></div>
                 <div className="settings-card">
-                  <Row title="Color mode" detail="System follows the current operating-system appearance.">
+                  <Row title={tr('Color mode', '颜色模式')} detail={tr('System follows the current operating-system appearance.', '“系统”会跟随操作系统当前外观。')}>
                     <Segmented
                       value={themeMode}
-                      label="Color mode"
-                      values={[{ value: 'system', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }]}
+                      label={tr('Color mode', '颜色模式')}
+                      values={[{ value: 'system', label: tr('System', '系统') }, { value: 'light', label: tr('Light', '浅色') }, { value: 'dark', label: tr('Dark', '深色') }]}
                       onChange={onThemeMode}
                     />
                   </Row>
-                  <Row title="Interface density" detail="Compact fits more sessions and plugin rows on screen.">
+                  <Row title={tr('Interface density', '界面密度')} detail={tr('Compact fits more sessions and plugin rows on screen.', '紧凑模式可在屏幕中容纳更多会话和插件行。')}>
                     <Segmented
                       value={density}
-                      label="Interface density"
-                      values={[{ value: 'comfortable', label: 'Comfortable' }, { value: 'compact', label: 'Compact' }]}
+                      label={tr('Interface density', '界面密度')}
+                      values={[{ value: 'comfortable', label: tr('Comfortable', '舒适') }, { value: 'compact', label: tr('Compact', '紧凑') }]}
                       onChange={onDensity}
                     />
                   </Row>
-                  <Row title="Serif assistant responses" detail="Use the local Sans + Serif pairing for clearer visual hierarchy.">
-                    <Toggle checked={responseSerif} label="Use serif assistant responses" onChange={onResponseSerif} />
+                  <Row title={tr('Serif assistant responses', '回答使用衬线字体')} detail={tr('Use the local Sans + Serif pairing for clearer visual hierarchy.', '使用本地无衬线与衬线字体组合，建立更清晰的视觉层级。')}>
+                    <Toggle checked={responseSerif} label={tr('Use serif assistant responses', '回答使用衬线字体')} onChange={onResponseSerif} />
                   </Row>
-                  <Row title="Reduce motion" detail="Disable drawer, palette, pulse, and loading animations.">
-                    <Toggle checked={reduceMotion} label="Reduce interface motion" onChange={onReduceMotion} />
+                  <Row title={tr('Reduce motion', '减少动态效果')} detail={tr('Disable drawer, palette, pulse, and loading animations.', '停用抽屉、面板、脉冲和加载动效。')}>
+                    <Toggle checked={reduceMotion} label={tr('Reduce interface motion', '减少界面动效')} onChange={onReduceMotion} />
                   </Row>
                 </div>
                 <div className="settings-type-preview" data-serif={responseSerif}>
@@ -279,12 +309,12 @@ export function SettingsPanel({
 
             {section === 'model' && (
               <section className="settings-page">
-                <div className="settings-page-heading"><p>CURRENT SESSION</p><h3>Model & permissions</h3><span>These controls call the existing Harness session APIs.</span></div>
+                <div className="settings-page-heading"><p>{tr('CURRENT SESSION', '当前会话')}</p><h3>{tr('Model & permissions', '模型与权限')}</h3><span>{tr('These controls call the existing Harness session APIs.', '这些控件调用现有 Harness 会话 API。')}</span></div>
                 {models === undefined ? (
                   <div className="settings-empty">Select a connected session to configure its model.</div>
                 ) : (
                   <div className="settings-card">
-                    <Row title="Model" detail="Provider and model used by the current session.">
+                    <Row title={tr('Model', '模型')} detail={tr('Provider and model used by the current session.', '当前会话使用的模型来源与模型。')}>
                       <label className="settings-select settings-select-provider"><ProviderLogo provider={models.current.provider} name={currentModel?.name} size={15} /><select value={`${models.current.provider}::${models.current.model}`} disabled={busy} onChange={event => {
                         const [provider = '', model = ''] = event.target.value.split('::')
                         onModel(provider, model)
@@ -292,12 +322,12 @@ export function SettingsPanel({
                         {models.groups.map(group => <optgroup label={group.name} key={group.id}>{group.models.map(model => <option value={`${group.id}::${model.id}`} key={`${group.id}-${model.id}`}>{model.name}</option>)}</optgroup>)}
                       </select><Icon name="chevron-down" size={12} /></label>
                     </Row>
-                    <Row title="Reasoning effort" detail="Higher effort can improve difficult coding and planning tasks.">
+                    <Row title={tr('Reasoning effort', '推理强度')} detail={tr('Higher effort can improve difficult coding and planning tasks.', '更高推理强度可改善困难的编码与规划任务。')}>
                       {efforts.length === 0 ? <span className="settings-unavailable">Not offered by this model</span> : (
                         <label className="settings-select"><select value={models.current.reasoningEffort ?? currentModel?.reasoning?.defaultEffort ?? ''} disabled={busy} onChange={event => onEffort(event.target.value)}>{efforts.map(effort => <option value={effort.id} key={effort.id}>{effort.name}</option>)}</select><Icon name="chevron-down" size={12} /></label>
                       )}
                     </Row>
-                    <Row title="Permission mode" detail="Controls approval routing and sandbox access for the selected provider.">
+                    <Row title={tr('Permission mode', '权限模式')} detail={codexPermissionDetail(running, effectivePermission, permission, tr)}>
                       {permission === undefined || permissionOptions.length === 0 ? <span className="settings-unavailable">Unavailable</span> : (
                         <label className="settings-select"><select value={permission} disabled={busy} onChange={event => onPermission(event.target.value)}>{permissionOptions.map(option => <option value={option.value} key={option.value}>{option.name}</option>)}</select><Icon name="chevron-down" size={12} /></label>
                       )}
@@ -341,6 +371,20 @@ export function SettingsPanel({
 
             {section === 'harness' && (
               <HarnessSettings active={open && section === 'harness'} />
+            )}
+
+            {section === 'archived' && (
+              <section className="settings-page">
+                <div className="settings-page-heading"><p>{tr('HISTORY', '历史记录')}</p><h3>{tr('Archived chats', '已归档对话')}</h3><span>{tr('Archived sessions stay out of the main sidebar.', '归档会话不会显示在主侧边栏。')}</span></div>
+                <div className="settings-archive-list">
+                  {archivedSessions.length === 0 ? <div className="settings-empty">{tr('No archived chats.', '暂无已归档对话。')}</div> : [...archivedSessions].sort((left, right) => right.updatedAt - left.updatedAt).map(session => (
+                    <div className="settings-archive-row" key={session.sessionId}>
+                      <button type="button" onClick={() => onArchivedSession(session.sessionId)}><Icon name="archive" size={14} /><span><strong>{archivedTitle(session)}</strong><small>{session.cwd ?? session.agentPreset ?? session.sessionId}</small></span></button>
+                      <button type="button" className="icon-button quiet" onClick={() => onArchivedMenu(session)} aria-label={tr('Archived chat actions', '归档对话操作')}><Icon name="more" size={14} /></button>
+                    </div>
+                  ))}
+                </div>
+              </section>
             )}
 
             {section === 'presets' && (

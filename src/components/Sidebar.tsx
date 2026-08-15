@@ -3,6 +3,7 @@ import { Icon } from './Icon.tsx'
 import { WhaleLogo } from './WhaleLogo.tsx'
 import { shortcutLabel } from '../lib/platform.ts'
 import type { SessionSearchHit, SessionSummary, WorkspaceSummary } from '../lib/types.ts'
+import { useI18n } from '../lib/i18n.tsx'
 
 interface SidebarProps {
   sessions: SessionSummary[]
@@ -92,11 +93,12 @@ export function Sidebar({
   onMoveWorkspace,
   onMoveSession,
 }: SidebarProps) {
+  const { tr } = useI18n()
   const openFolderShortcut = shortcutLabel('O')
   const pluginShortcut = shortcutLabel('P', true)
   const settingsShortcut = shortcutLabel(',')
   const [query, setQuery] = useState('')
-  const [closedGroups, setClosedGroups] = useState<Set<string>>(new Set(['__archived__']))
+  const [closedGroups, setClosedGroups] = useState<Set<string>>(new Set())
   const [dragging, setDragging] = useState<DragPayload>()
   const [dropTarget, setDropTarget] = useState<string>()
   const archivedIds = useMemo(() => new Set(archivedSessionIds), [archivedSessionIds])
@@ -106,10 +108,6 @@ export function Sidebar({
   )
   const activeSessions = useMemo(
     () => availableSessions.filter(session => !archivedIds.has(session.sessionId)),
-    [archivedIds, availableSessions],
-  )
-  const archivedSessions = useMemo(
-    () => availableSessions.filter(session => archivedIds.has(session.sessionId)),
     [archivedIds, availableSessions],
   )
   const byId = useMemo(() => new Map(activeSessions.map(session => [session.sessionId, session])), [activeSessions])
@@ -129,10 +127,6 @@ export function Sidebar({
   }
   const groupedIds = new Set(workspaces.flatMap(workspace => workspace.sessionIds))
   const ungrouped = activeSessions.filter(session => !groupedIds.has(session.sessionId))
-  const archivedRows = archivedSessions
-    .filter(visible)
-    .sort((left, right) => right.updatedAt - left.updatedAt)
-  const archivedClosed = normalized === '' && closedGroups.has('__archived__')
 
   const toggleGroup = (workspaceId: string): void => {
     setClosedGroups(current => {
@@ -207,7 +201,7 @@ export function Sidebar({
   )
 
   return (
-    <aside className="sidebar" data-collapsed={collapsed} aria-label="Sessions">
+    <aside className="sidebar" data-collapsed={collapsed} aria-label={tr('Sessions', '会话')}>
       <div className="brand-row">
         <div className="brand-mark" title="DeepSeek Harness">
           <WhaleLogo size={collapsed ? 26 : 29} />
@@ -231,14 +225,14 @@ export function Sidebar({
         </button>
       )}
 
-      <button type="button" className="new-session" onClick={onNew} title="New session">
+      <button type="button" className="new-session" onClick={onNew} title={tr('New session', '新建会话')}>
         <Icon name="plus" size={17} />
-        {!collapsed && <span>New session</span>}
+        {!collapsed && <span>{tr('New session', '新建会话')}</span>}
       </button>
 
       <button type="button" className="open-folder" onClick={onOpenFolder} title={`Open folder (${openFolderShortcut})`}>
         <Icon name="folder-plus" size={16} />
-        {!collapsed && <span>Open folder…</span>}
+        {!collapsed && <span>{tr('Open folder…', '打开文件夹…')}</span>}
         {!collapsed && <kbd>{openFolderShortcut}</kbd>}
       </button>
 
@@ -248,8 +242,8 @@ export function Sidebar({
           <input
             value={query}
             onChange={event => setQuery(event.target.value)}
-            placeholder="Search sessions"
-            aria-label="Search sessions"
+            placeholder={tr('Search sessions', '搜索会话')}
+            aria-label={tr('Search sessions', '搜索会话')}
           />
         </label>
       )}
@@ -334,26 +328,10 @@ export function Sidebar({
         })}
         {ungrouped.filter(visible).length > 0 && (
           <section className="session-group">
-            {!collapsed && <div className="group-label">Ungrouped</div>}
+            {!collapsed && <div className="group-label">{tr('Ungrouped', '未分组')}</div>}
             {ungrouped.filter(visible)
               .sort((left, right) => Number(pinnedSessionIds.has(right.sessionId)) - Number(pinnedSessionIds.has(left.sessionId)))
               .map(session => row(session))}
-          </section>
-        )}
-        {!collapsed && archivedRows.length > 0 && (
-          <section className="session-group archived-group" data-collapsed={archivedClosed}>
-            <button
-              type="button"
-              className="archived-heading"
-              onClick={() => toggleGroup('__archived__')}
-              aria-expanded={!archivedClosed}
-            >
-              <Icon name={archivedClosed ? 'chevron-right' : 'chevron-down'} size={13} />
-              <Icon name="archive" size={14} />
-              <span>Archived</span>
-              <small>{archivedRows.length}</small>
-            </button>
-            {!archivedClosed && archivedRows.map(session => row(session, undefined, true))}
           </section>
         )}
       </div>
@@ -361,12 +339,12 @@ export function Sidebar({
       <div className="sidebar-footer">
         <button type="button" className="footer-button" onClick={onPlugins} title={`Manage plugins (${pluginShortcut})`}>
           <Icon name="plug" size={16} />
-          {!collapsed && <span>Plugins</span>}
+          {!collapsed && <span>{tr('Plugins', '插件')}</span>}
           {!collapsed && pluginCount !== undefined && <small className="footer-count">{pluginCount}</small>}
         </button>
         <button type="button" className="footer-button" onClick={onSettings} title={`Settings (${settingsShortcut})`}>
           <Icon name="settings" size={16} />
-          {!collapsed && <span>Settings</span>}
+          {!collapsed && <span>{tr('Settings', '设置')}</span>}
         </button>
       </div>
     </aside>

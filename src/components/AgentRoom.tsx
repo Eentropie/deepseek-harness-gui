@@ -3,14 +3,18 @@ import { agentWorkspaceApi, codexApi, harnessApi, subscribeCodex } from '../lib/
 import {
   AGENT_ROOM_CODEX_PROVIDER,
   AGENT_ROOM_ROLES,
+  agentRoomReport,
   agentPermissionChoices,
   agentRoomOwnerId,
+  buildAgentRoomContext,
   configuredAgentGroups,
+  defaultAgentRoomAgents,
   independentAuditPrompt,
   judgmentPrompt,
   managedAgentHostSessionIds,
   readAgentRoom,
   rebuttalPrompt,
+  roomFollowupPrompt,
   writeAgentRoom,
   type AgentRoomAgent,
   type AgentRoomArtifact,
@@ -25,6 +29,13 @@ import type { CodexEvent, ConversationMessage, NetworkMode, SessionModels, Subag
 import { Icon } from './Icon.tsx'
 import { Markdown } from './Markdown.tsx'
 import { ProviderLogo } from './ProviderLogo.tsx'
+import { useI18n } from '../lib/i18n.tsx'
+
+export interface AgentRoomRequest {
+  id: string
+  kind: 'audit' | 'followup'
+  text: string
+}
 
 interface AgentRoomProps {
   hidden: boolean
@@ -33,11 +44,16 @@ interface AgentRoomProps {
   cwd?: string
   agentPreset?: string
   models?: SessionModels
+  parentMessages: ConversationMessage[]
+  hostPermission?: string
+  request?: AgentRoomRequest
   nativeSubagents?: SubagentCatalog
   subagentView?: { id: string; label: string }
   onOpenNative: (entry: Extract<SubagentEntry, { kind: 'child' }>) => void
   onExitNative: () => void
   onManagedHostSessions: (sessionIds: string[]) => void
+  onRequestHandled: (requestId: string) => void
+  onDeliverReport: (report: string, parentSessionId: string) => Promise<void>
 }
 
 interface AgentDraft {
@@ -95,18 +111,25 @@ export function AgentRoom({
   cwd,
   agentPreset,
   models,
+  parentMessages,
+  hostPermission = 'workspace-write',
+  request,
   nativeSubagents,
   subagentView,
   onOpenNative,
   onExitNative,
   onManagedHostSessions,
+  onRequestHandled,
+  onDeliverReport,
 }: AgentRoomProps) {
+  const { tr } = useI18n()
   const groups = useMemo(() => configuredAgentGroups(models), [models])
   const [room, setRoom] = useState<AgentRoomSnapshot>(EMPTY_AGENT_ROOM)
   const roomRef = useRef(room)
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState<AgentDraft>()
   const [error, setError] = useState<string>()
+  const [followup, setFollowup] = useState('')
   const stopped = useRef(false)
   const activeRuns = useRef(new Map<string, ActiveRun>())
   const activeParent = useRef(parentSessionId)
@@ -159,17 +182,27 @@ export function AgentRoom({
         provider: firstGroup.id,
         model: firstModel.id,
         effort: firstModel.reasoning?.defaultEffort,
-        permission: 'read-only',
+        permission: firstGroup.id === AGENT_ROOM_CODEX_PROVIDER ? 'read-only' : hostPermission,
         network: 'auto',
         role: roomRef.current.agents.length === 1 ? 'challenger' : roomRef.current.agents.length >= 2 ? 'judge' : 'reviewer',
         label: '',
       }
     })
-  }, [groups])
+  }, [groups, hostPermission])
 
   const selectedGroup = draft === undefined ? undefined : groups.find(group => group.id === draft.provider)
   const selectedModel = selectedGroup?.models.find(model => model.id === draft?.model)
-  const selectedPermissions = draft === undefined ? [] : agentPermissionChoices(draft.provider)
+  const selectedPermissions = draft === undefined ? [] : agentPermissionChoices(draft.provider, hostPermission)
+
+  useEffect(() => {
+    if (parentSessionId === undefined) return
+    commitRoom(current => {
+      const agents = current.agents.map(agent => agent.provider === AGENT_ROOM_CODEX_PROVIDER
+        ? agent
+        : { ...agent, permission: hostPermission, effectivePermission: hostPermission })
+      return agents.every((agent, index) => agent === current.agents[index]) ? current : { ...current, agents }
+    })
+  }, [commitRoom, hostPermission, parentSessionId])
 
   const updateAgent = useCallback((agentId: string, update: Partial<AgentRoomAgent>): AgentRoomAgent | undefined => {
     let result: AgentRoomAgent | undefined
@@ -212,7 +245,7 @@ export function AgentRoom({
       provider: selection.group.id,
       model: selection.model.id,
       effort: selection.model.reasoning?.defaultEffort,
-      permission: 'read-only',
+      permission: selection.group.id === AGENT_ROOM_CODEX_PROVIDER ? 'read-only' : hostPermission,
     })
   }
 
@@ -235,7 +268,7 @@ export function AgentRoom({
       ...current,
       label: '',
       role: room.agents.length === 0 ? 'challenger' : room.agents.length === 1 ? 'judge' : 'reviewer',
-      permission: 'read-only',
+      permission: current.provider === AGENT_ROOM_CODEX_PROVIDER ? 'read-only' : hostPermission,
     })
     setAdding(false)
   }
@@ -257,7 +290,7 @@ export function AgentRoom({
 
   const runtimeDirectory = async (agent: AgentRoomAgent): Promise<{ cwd: string; isolated: boolean }> => {
     if (cwd === undefined || parentSessionId === undefined) throw new Error('The main thread has no working directory')
-    const permission = agentPermissionChoices(agent.provider).find(choice => choice.value === agent.permission)
+    const permission = agentPermissionChoices(agent.provider, hostPermission).find(choice => choice.value === agent.permission)
     if (permission?.isolated !== true) return { cwd, isolated: false }
     const workspace = await agentWorkspaceApi.ensure({ parentSessionId, cwd, agentId: agent.id })
     return { cwd: workspace.cwd, isolated: workspace.isolated }
@@ -281,6 +314,7 @@ export function AgentRoom({
       }
     })
     try {
+      updateAgent(agent.id, { effectivePermission: agent.permission })
       const result = await codexApi.prompt({
         sessionId: owner,
         ...(agent.codexThreadId === undefined ? {} : { threadId: agent.codexThreadId }),
@@ -325,19 +359,9 @@ export function AgentRoom({
     activeRuns.current.set(agent.id, { kind: 'host', hostSessionId: sessionId })
     try {
       await harnessApi.selectModel(sessionId, agent.provider, agent.model, agent.effort)
-      let permissionPage = await harnessApi.history(sessionId)
-      if (permissionPage.projections?.values.permissions?.currentValue !== agent.permission) {
-        await harnessApi.setPermission(sessionId, agent.permission)
-        for (let attempt = 0; attempt < 80; attempt += 1) {
-          if (stopped.current) throw new Error('Agent Room stopped')
-          await sleep(attempt === 0 ? 140 : 300)
-          const [page, sessions] = await Promise.all([harnessApi.history(sessionId), harnessApi.sessions()])
-          permissionPage = page
-          const running = sessions.items.find(session => session.sessionId === sessionId)?.running === true
-          if (page.projections?.values.permissions?.currentValue === agent.permission && !running) break
-          if (attempt === 79) throw new Error(`Host did not apply permission ${agent.permission}`)
-        }
-      }
+      const permissionPage = await harnessApi.history(sessionId)
+      const effectivePermission = permissionPage.projections?.values.permissions?.currentValue ?? hostPermission
+      updateAgent(agent.id, { permission: effectivePermission, effectivePermission })
       const baseline = projectConversation((await harnessApi.history(sessionId)).events).filter(message => message.role === 'assistant').length
       await harnessApi.prompt(sessionId, [
         { type: 'text', text: deepSeekNetworkPolicy(resolvedNetwork(agent.network)) },
@@ -361,6 +385,16 @@ export function AgentRoom({
       activeRuns.current.delete(agent.id)
     }
   }
+
+  const stopActiveRuns = useCallback(async (): Promise<void> => {
+    stopped.current = true
+    const runs = [...activeRuns.current.values()]
+    await Promise.allSettled(runs.map(run => {
+      if (run.kind === 'host' && run.hostSessionId !== undefined) return harnessApi.cancel(run.hostSessionId)
+      if (run.kind === 'codex' && run.threadId !== undefined && run.turnId !== undefined) return codexApi.interrupt(run.threadId, run.turnId)
+      return Promise.resolve()
+    }))
+  }, [])
 
   const executeAgent = async (agentInput: AgentRoomAgent, prompt: string, phase: AgentRoomArtifactPhase): Promise<string> => {
     const artifact: AgentRoomArtifact = {
@@ -398,24 +432,20 @@ export function AgentRoom({
     setError(undefined)
     commitRoom(current => ({ ...current, running: true, phase: 'independent', artifacts: [], finalOutput: undefined }))
     try {
-      const independentSettled = await Promise.allSettled(participants.map(async agent => ({
+      const independent = await Promise.all(participants.map(async agent => ({
         agent,
-        output: await executeAgent(agent, independentAuditPrompt(room.task, agent), 'independent'),
+        output: await executeAgent(agent, independentAuditPrompt(room.task, agent, roomRef.current.context), 'independent'),
       })))
       if (stopped.current) throw new Error('Agent Room stopped')
-      const independent = independentSettled.flatMap(result => result.status === 'fulfilled' ? [result.value] : [])
-      if (independent.length < 2) throw new Error('Fewer than two independent agents completed successfully')
 
       commitRoom(current => ({ ...current, phase: 'rebuttal' }))
-      const rebuttalSettled = await Promise.allSettled(participants.map(async agent => ({
+      const rebuttals = await Promise.all(participants.map(async agent => ({
         agent,
         output: await executeAgent(agent, rebuttalPrompt(room.task, agent, independent
           .filter(item => item.agent.id !== agent.id)
           .map(item => ({ label: item.agent.label, output: item.output }))), 'rebuttal'),
       })))
       if (stopped.current) throw new Error('Agent Room stopped')
-      const rebuttals = rebuttalSettled.flatMap(result => result.status === 'fulfilled' ? [result.value] : [])
-      if (rebuttals.length === 0) throw new Error('No rebuttal agent completed successfully')
 
       commitRoom(current => ({ ...current, phase: 'judgment' }))
       const evidence = [
@@ -423,9 +453,12 @@ export function AgentRoom({
         ...rebuttals.map(item => ({ agent: item.agent.label, phase: 'rebuttal' as const, output: item.output })),
       ]
       const finalOutput = await executeAgent(judge, judgmentPrompt(room.task, evidence), 'judgment')
-      commitRoom(current => ({ ...current, running: false, phase: 'completed', finalOutput }))
+      const completed = commitRoom(current => ({ ...current, running: false, phase: 'completed', finalOutput, reportStatus: 'pending' }))
+      await onDeliverReport(agentRoomReport(completed), parentSessionId)
+      commitRoom(current => ({ ...current, reportStatus: 'delivered' }))
     } catch (reason) {
       const stoppedRun = stopped.current || errorText(reason) === 'Agent Room stopped'
+      await stopActiveRuns()
       commitRoom(current => ({ ...current, running: false, phase: stoppedRun ? 'stopped' : 'failed' }))
       if (!stoppedRun) setError(errorText(reason))
     } finally {
@@ -435,15 +468,74 @@ export function AgentRoom({
 
   const handleStop = async (): Promise<void> => {
     if (!room.running) return
-    stopped.current = true
-    const runs = [...activeRuns.current.values()]
-    await Promise.allSettled(runs.map(run => {
-      if (run.kind === 'host' && run.hostSessionId !== undefined) return harnessApi.cancel(run.hostSessionId)
-      if (run.kind === 'codex' && run.threadId !== undefined && run.turnId !== undefined) return codexApi.interrupt(run.threadId, run.turnId)
-      return Promise.resolve()
-    }))
+    await stopActiveRuns()
     commitRoom(current => ({ ...current, running: false, phase: 'stopped' }))
   }
+
+  const handleFollowup = async (questionInput: string): Promise<void> => {
+    const question = questionInput.trim()
+    if (question === '' || roomRef.current.running || roomRef.current.finalOutput === undefined) return
+    const mention = question.match(/^@([^\s]+)\s+(.+)$/s)
+    const mentionName = mention?.[1]?.toLocaleLowerCase()
+    const requestedName = mentionName === 'room' ? undefined : mentionName
+    const body = mention?.[2] ?? question
+    const agents = requestedName === undefined
+      ? roomRef.current.agents.filter(agent => agent.role !== 'judge')
+      : roomRef.current.agents.filter(agent => agent.label.toLocaleLowerCase() === requestedName || agent.label.toLocaleLowerCase().startsWith(requestedName))
+    if (agents.length === 0) {
+      setError(tr('No matching agent. Use the exact agent name after @.', '没有匹配的 Agent，请在 @ 后使用准确名称。'))
+      return
+    }
+    stopped.current = false
+    setError(undefined)
+    commitRoom(current => ({ ...current, running: true, phase: 'independent' }))
+    try {
+      const answers = await Promise.all(agents.map(async agent => ({
+        agent,
+        output: await executeAgent(agent, roomFollowupPrompt(currentTask(), body, agent, roomRef.current.finalOutput, roomRef.current.context), 'independent'),
+      })))
+      const judge = roomRef.current.agents.find(agent => agent.role === 'judge') ?? answers[0]!.agent
+      const finalOutput = answers.length === 1
+        ? answers[0]!.output
+        : await executeAgent(judge, judgmentPrompt(`${currentTask()}\n\nFollow-up: ${body}`, answers.map(item => ({ agent: item.agent.label, phase: 'independent', output: item.output }))), 'judgment')
+      const completed = commitRoom(current => ({ ...current, running: false, phase: 'completed', finalOutput, reportStatus: 'pending' }))
+      if (parentSessionId === undefined) throw new Error('The parent session is unavailable')
+      await onDeliverReport(agentRoomReport(completed), parentSessionId)
+      commitRoom(current => ({ ...current, reportStatus: 'delivered' }))
+      setFollowup('')
+    } catch (reason) {
+      const stoppedRun = stopped.current || errorText(reason) === 'Agent Room stopped'
+      await stopActiveRuns()
+      commitRoom(current => ({ ...current, running: false, phase: stoppedRun ? 'stopped' : 'failed' }))
+      if (!stoppedRun) setError(errorText(reason))
+    } finally {
+      activeRuns.current.clear()
+    }
+  }
+
+  const currentTask = (): string => roomRef.current.task
+
+  useEffect(() => {
+    if (request === undefined || parentSessionId === undefined) return
+    if (request.kind === 'audit') {
+      const context = buildAgentRoomContext(parentSessionId, parentMessages)
+      commitRoom(current => ({
+        ...current,
+        task: request.text.trim() || parentTitle || 'Audit the current thread',
+        context,
+        agents: current.agents.length >= 2 ? current.agents : defaultAgentRoomAgents(groups, hostPermission),
+        phase: 'idle',
+        artifacts: [],
+        finalOutput: undefined,
+        reportStatus: undefined,
+      }))
+    } else {
+      void handleFollowup(request.text)
+    }
+    onRequestHandled(request.id)
+  // Request IDs are one-shot commands; room functions intentionally read their latest refs.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request?.id])
 
   return (
     <div className="agent-room inspector-scroll" hidden={hidden} aria-label="Agent Room">
@@ -451,42 +543,42 @@ export function AgentRoom({
         <div>
           <span className="agent-room-kicker">DESKTOP ORCHESTRATION</span>
           <h3>Agent Room</h3>
-          <p>Independent review, cross rebuttal, then a judge synthesis. Claude Code is not enabled.</p>
+          <p>{tr('Independent review, cross rebuttal, then a judge synthesis. Claude Code is not enabled.', '独立审查、交叉反驳，再由裁判综合结论。当前不接入 Claude Code。')}</p>
         </div>
         <button type="button" className="agent-room-add" onClick={() => setAdding(value => !value)} disabled={groups.length === 0 || room.agents.length >= 8 || room.running} aria-expanded={adding}>
-          <Icon name={adding ? 'x' : 'plus'} size={13} /> {adding ? 'Cancel' : 'Add agent'}
+          <Icon name={adding ? 'x' : 'plus'} size={13} /> {adding ? tr('Cancel', '取消') : tr('Add agent', '添加 Agent')}
         </button>
       </section>
 
       <div className="agent-source-strip" aria-label="Available connected model sources">
-        {groups.length === 0 ? <span>No connected model source is available.</span> : groups.map(group => (
+        {groups.length === 0 ? <span>{tr('No connected model source is available.', '没有可用的已连接模型来源。')}</span> : groups.map(group => (
           <span key={group.id}><ProviderLogo provider={group.id} name={group.name} size={13} />{group.name}<b>{group.models.length}</b></span>
         ))}
       </div>
 
       {adding && draft !== undefined && (
         <section className="agent-create-card">
-          <label><span>Name</span><input value={draft.label} onChange={event => setDraft(current => current === undefined ? current : { ...current, label: event.target.value })} placeholder="Optional agent name" maxLength={64} /></label>
-          <label><span>Model source</span><select value={`${draft.provider}\u0000${draft.model}`} onChange={event => handleModelDraft(event.target.value)}>{groups.map(group => <optgroup key={group.id} label={group.name}>{group.models.map(model => <option key={model.id} value={`${group.id}\u0000${model.id}`}>{model.name}</option>)}</optgroup>)}</select></label>
+          <label><span>{tr('Name', '名称')}</span><input value={draft.label} onChange={event => setDraft(current => current === undefined ? current : { ...current, label: event.target.value })} placeholder={tr('Optional agent name', '可选 Agent 名称')} maxLength={64} /></label>
+          <label><span>{tr('Model source', '模型来源')}</span><select value={`${draft.provider}\u0000${draft.model}`} onChange={event => handleModelDraft(event.target.value)}>{groups.map(group => <optgroup key={group.id} label={group.name}>{group.models.map(model => <option key={model.id} value={`${group.id}\u0000${model.id}`}>{model.name}</option>)}</optgroup>)}</select></label>
           <div className="agent-create-grid">
             <label><span>Role</span><select value={draft.role} onChange={event => setDraft(current => current === undefined ? current : { ...current, role: event.target.value as AgentRoomRole })}>{AGENT_ROOM_ROLES.map(role => <option key={role.value} value={role.value}>{role.name}</option>)}</select></label>
             <label><span>Effort</span><select value={draft.effort ?? ''} disabled={(selectedModel?.reasoning?.efforts.length ?? 0) === 0} onChange={event => setDraft(current => current === undefined ? current : { ...current, effort: event.target.value || undefined })}><option value="">Default</option>{selectedModel?.reasoning?.efforts.map(effort => <option key={effort.id} value={effort.id}>{effort.name}</option>)}</select></label>
-            <label><span>Permission</span><select value={draft.permission} onChange={event => setDraft(current => current === undefined ? current : { ...current, permission: event.target.value })}>{selectedPermissions.map(choice => <option key={choice.value} value={choice.value}>{choice.name}</option>)}</select></label>
+            <label><span>{tr('Permission', '权限')}</span><select value={draft.permission} onChange={event => setDraft(current => current === undefined ? current : { ...current, permission: event.target.value })}>{selectedPermissions.map(choice => <option key={choice.value} value={choice.value}>{choice.name}</option>)}</select></label>
             <label><span>Web</span><select value={draft.network} onChange={event => setDraft(current => current === undefined ? current : { ...current, network: event.target.value as NetworkMode })}><option value="off">Off</option><option value="auto">Auto</option><option value="ask">Ask each round</option></select></label>
           </div>
           <p>{selectedPermissions.find(choice => choice.value === draft.permission)?.description}</p>
-          <button type="button" className="agent-create-confirm" onClick={handleAdd}>Add to room</button>
+          <button type="button" className="agent-create-confirm" onClick={handleAdd}>{tr('Add to room', '加入房间')}</button>
         </section>
       )}
 
       <section className="agent-room-section">
-        <div className="review-heading"><strong>Managed agents</strong><span>{room.agents.length} configured</span></div>
+        <div className="review-heading"><strong>{tr('Managed agents', '受管 Agent')}</strong><span>{room.agents.length} {tr('configured', '个已配置')}</span></div>
         <div className="agent-roster">
-          {room.agents.length === 0 ? <div className="review-empty compact"><Icon name="agent" size={18} /><strong>No managed agents</strong><span>Add only from connected API or subscription sources.</span></div> : room.agents.map(agent => {
+          {room.agents.length === 0 ? <div className="review-empty compact"><Icon name="agent" size={18} /><strong>{tr('No managed agents', '尚无受管 Agent')}</strong><span>{tr('Add only from connected API or subscription sources.', '只显示已接入 API Key 或订阅的模型来源。')}</span></div> : room.agents.map(agent => {
             const status = [...room.artifacts].reverse().find(artifact => artifact.agentId === agent.id)
             return <article className="managed-agent-card" key={agent.id} data-running={status?.status === 'running'}>
               <div className="managed-agent-logo"><ProviderLogo provider={agent.provider} name={agent.model} size={17} /></div>
-              <div><strong>{agent.label}</strong><span>{agent.role} · {agent.model}</span><small>{agent.permission} · web {agent.network}{agent.isolated ? ' · isolated' : ''}</small></div>
+              <div><strong>{agent.label}</strong><span>{agent.role} · {agent.model}</span><small>{agent.effectivePermission === undefined ? tr('Next run', '下一轮') : tr('Effective', '实际')} {agent.effectivePermission ?? agent.permission} · web {agent.network}{agent.isolated ? ` · ${tr('isolated', '隔离')}` : ''}</small></div>
               <i data-status={status?.status ?? 'idle'} />
               <button type="button" onClick={() => handleRemove(agent.id)} disabled={room.running} aria-label={`Remove ${agent.label}`}><Icon name="x" size={12} /></button>
             </article>
@@ -495,14 +587,14 @@ export function AgentRoom({
       </section>
 
       <section className="agent-room-section agent-task-card">
-        <div className="review-heading"><strong>Adversarial audit</strong><span>{phaseLabel(room.phase)}</span></div>
-        <textarea value={room.task} onChange={event => commitRoom(current => ({ ...current, task: event.target.value }))} placeholder="Describe the change, risk, or workspace area to audit…" disabled={room.running} />
+        <div className="review-heading"><strong>{tr('Adversarial audit', '多 Agent 对抗审计')}</strong><span>{phaseLabel(room.phase)}</span></div>
+        <textarea value={room.task} onChange={event => commitRoom(current => ({ ...current, task: event.target.value }))} placeholder={tr('Describe the change, risk, or workspace area to audit…', '描述需要审计的变更、风险或工作区范围…')} disabled={room.running} />
         <div className="agent-pipeline" aria-label="Audit pipeline">
           {(['independent', 'rebuttal', 'judgment'] as const).map((phase, index) => <span key={phase} data-active={room.phase === phase} data-complete={room.phase === 'completed' || (phase === 'independent' && (room.phase === 'rebuttal' || room.phase === 'judgment')) || (phase === 'rebuttal' && room.phase === 'judgment')}><b>{index + 1}</b>{phase === 'independent' ? 'Review' : phase === 'rebuttal' ? 'Rebut' : 'Judge'}</span>)}
         </div>
         <div className="agent-room-actions">
           {room.running ? <button type="button" className="agent-stop-button" onClick={() => { void handleStop() }}><Icon name="stop" size={12} /> Stop room</button> : <button type="button" className="agent-run-button" onClick={() => { void handleRun() }} disabled={room.task.trim() === '' || room.agents.filter(agent => agent.role !== 'judge').length < 2}><Icon name="sparkles" size={13} /> Run adversarial audit</button>}
-          <span>Reviewers default to read only. Write modes use isolated Git worktrees.</span>
+          <span>{tr('Codex reviewers can use true read-only sandboxes. DeepSeek displays the Local Host permission actually in effect.', 'Codex 审查者可使用真实只读沙箱；DeepSeek 显示 Local Host 当前真正生效的权限。')}</span>
         </div>
         {error !== undefined && <p className="agent-room-error">{error}</p>}
       </section>
@@ -522,8 +614,12 @@ export function AgentRoom({
 
       {room.finalOutput !== undefined && (
         <section className="agent-room-section agent-final">
-          <div className="review-heading"><strong>Judge verdict</strong><span>Final</span></div>
+          <div className="review-heading"><strong>{tr('Judge verdict', '裁判结论')}</strong><span>{room.reportStatus === 'delivered' ? tr('Returned to main', '已回注主线程') : tr('Returning…', '正在回注…')}</span></div>
           <div className="agent-final-copy"><Markdown>{room.finalOutput}</Markdown></div>
+          <div className="agent-room-followup">
+            <textarea value={followup} onChange={event => setFollowup(event.target.value)} placeholder={tr('Ask the whole room, or start with @AgentName…', '追问整个 Room，或以 @Agent名称 开头…')} disabled={room.running} />
+            <button type="button" onClick={() => { void handleFollowup(followup) }} disabled={room.running || followup.trim() === ''}>{tr('Ask room', '追问 Room')}</button>
+          </div>
         </section>
       )}
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   agentPermissionChoices,
+  buildAgentRoomContext,
   configuredAgentGroups,
   independentAuditPrompt,
   judgmentPrompt,
@@ -34,11 +35,20 @@ describe('Agent Room', () => {
     }).map(group => group.id)).toEqual(['deepseek', 'codex-cli'])
   })
 
-  it('defaults every provider family to an explicit read-only audit mode', () => {
-    expect(agentPermissionChoices('deepseek')[0]?.value).toBe('read-only')
+  it('uses the real Host permission for DeepSeek and a real read-only Codex sandbox', () => {
+    expect(agentPermissionChoices('deepseek', 'workspace-write')[0]?.value).toBe('workspace-write')
+    expect(agentPermissionChoices('deepseek', 'workspace-write')).toHaveLength(1)
     expect(agentPermissionChoices('codex-cli')[0]?.value).toBe('read-only')
-    expect(agentPermissionChoices('deepseek')[1]?.isolated).toBe(true)
     expect(agentPermissionChoices('codex-cli')[1]?.isolated).toBe(true)
+  })
+
+  it('freezes a bounded parent transcript for independent agents', () => {
+    const context = buildAgentRoomContext('parent', [{
+      id: 'm1', seq: 1, time: 1, role: 'user', blocks: [{ kind: 'text', text: 'Audit the permission bridge' }],
+    }])
+    expect(context.sourceSessionId).toBe('parent')
+    expect(context.transcript).toContain('Audit the permission bridge')
+    expect(independentAuditPrompt('Audit auth', reviewer, context)).toContain('<frozen_parent_context>')
   })
 
   it('builds the three evidence-separated audit phases', () => {

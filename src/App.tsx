@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from 'react'
 import { Composer } from './components/Composer.tsx'
 import { CommandPalette } from './components/CommandPalette.tsx'
 import { Conversation } from './components/Conversation.tsx'
 import { GoalDialog } from './components/GoalDialog.tsx'
 import { Icon } from './components/Icon.tsx'
 import { Inspector } from './components/Inspector.tsx'
+import type { AgentRoomRequest } from './components/AgentRoom.tsx'
 import type { QuestionAnswer } from './components/InteractionPanel.tsx'
 import { JobDock } from './components/JobDock.tsx'
 import { OnboardingWizard } from './components/OnboardingWizard.tsx'
@@ -46,7 +47,8 @@ import {
 import { permissionOverrideForNewSession } from './lib/session-permission.ts'
 import { deepSeekNetworkPolicy, isNetworkMode } from './lib/network-mode.ts'
 import { isPlaceholderSidechatTitle, reconcileSidechatThreads } from './lib/sidechat-state.ts'
-import { allManagedAgentHostSessionIds } from './lib/agent-room.ts'
+import { allManagedAgentHostSessionIds, readAgentRoom } from './lib/agent-room.ts'
+import { useI18n } from './lib/i18n.tsx'
 import { TrailingTask } from './lib/trailing-task.ts'
 import { platformBasename as basename, shortcutLabel } from './lib/platform.ts'
 import type {
@@ -86,6 +88,7 @@ const EMPTY_HISTORY: HistoryPage = { events: [], hasMore: false }
 const CODEX_PROVIDER = 'codex-cli'
 const DEFAULT_CODEX_PERMISSION: CodexPermissionMode = 'ask-for-approval'
 const CODEX_PERMISSION_OPTIONS: PermissionOption[] = [
+  { value: 'read-only', name: 'Read only', description: 'Use the real Codex read-only sandbox for the turn.' },
   { value: 'ask-for-approval', name: 'Ask for approval', description: 'Ask you before privileged commands or sandbox escapes.' },
   { value: 'approve-for-me', name: 'Approve for me', description: 'Route approval requests to the Codex automatic reviewer.' },
   { value: 'full-access', name: 'Full access', description: 'Run without approval prompts or filesystem sandboxing.' },
@@ -107,12 +110,6 @@ const TERMINAL_OPEN_STORAGE_KEY = 'dsh-workbench-terminal-open'
 const ONBOARDING_STORAGE_KEY = 'dsh-workbench-onboarding-v1'
 const NETWORK_MODES_STORAGE_KEY = 'dsh-workbench-network-modes-v1'
 const CODEX_QUEUES_STORAGE_KEY = 'dsh-workbench-codex-queues-v1'
-const STARTUP_GREETING = (() => {
-  const greeting = chooseGreeting(new Date(), localStorage.getItem(GREETING_STORAGE_KEY) ?? undefined)
-  localStorage.setItem(GREETING_STORAGE_KEY, greeting)
-  return greeting
-})()
-
 interface CodexSessionState {
   active: boolean
   threadId?: string
@@ -163,7 +160,7 @@ function readCodexSession(sessionId: string): CodexSessionState {
     if (typeof value !== 'object' || value === null) return EMPTY_CODEX_SESSION
     const record = value as Record<string, unknown>
     const rawPermission = record['permission']
-    const permission = rawPermission === 'ask-for-approval' || rawPermission === 'approve-for-me' || rawPermission === 'full-access'
+    const permission = rawPermission === 'read-only' || rawPermission === 'ask-for-approval' || rawPermission === 'approve-for-me' || rawPermission === 'full-access'
       ? rawPermission
       : DEFAULT_CODEX_PERMISSION
     return {
@@ -315,7 +312,7 @@ function storedCodexQueues(): Record<string, CodexQueuedPrompt[]> {
         const network = item['network']
         if (typeof item['id'] !== 'string' || typeof item['prompt'] !== 'string' || item['prompt'].trim() === ''
           || typeof item['cwd'] !== 'string' || typeof item['model'] !== 'string' || typeof item['effort'] !== 'string'
-          || (permission !== 'ask-for-approval' && permission !== 'approve-for-me' && permission !== 'full-access')
+          || (permission !== 'read-only' && permission !== 'ask-for-approval' && permission !== 'approve-for-me' && permission !== 'full-access')
           || (network !== 'off' && network !== 'auto')) return []
         return [{
           id: item['id'],
@@ -372,6 +369,7 @@ async function base64Of(file: File): Promise<string> {
 }
 
 export function App() {
+  const { locale, tr } = useI18n()
   const [host, setHost] = useState<HostDescription>()
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
@@ -393,6 +391,7 @@ export function App() {
   const [codexMessages, setCodexMessages] = useState<ConversationMessage[]>([])
   const [codexRunning, setCodexRunning] = useState(false)
   const [codexTurnId, setCodexTurnId] = useState<string>()
+  const [codexEffectivePermission, setCodexEffectivePermission] = useState<CodexPermissionMode>()
   const [connection, setConnection] = useState<ConnectionState>('connecting')
   const [chromeLoading, setChromeLoading] = useState(true)
   const [historyLoading, setHistoryLoading] = useState(false)
@@ -443,6 +442,11 @@ export function App() {
   const [pluginBackup, setPluginBackup] = useState<string>()
   const [sidebarExpanded, setSidebarExpanded] = useState(() => storedBoolean('dsh-workbench-sidebar', true))
   const [inspectorOpen, setInspectorOpen] = useState(() => storedBoolean('dsh-workbench-inspector', true))
+  const [inspectorWidth, setInspectorWidth] = useState(() => {
+    const stored = Number(localStorage.getItem('dsh-workbench-inspector-width'))
+    return Number.isFinite(stored) ? Math.min(720, Math.max(280, stored)) : 360
+  })
+  const [agentRoomRequest, setAgentRoomRequest] = useState<AgentRoomRequest>()
   const [terminalOpen, setTerminalOpen] = useState(() => storedBoolean(TERMINAL_OPEN_STORAGE_KEY, false))
   const [themeMode, setThemeMode] = useState<ThemeMode>(storedThemeMode)
   const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
@@ -472,6 +476,12 @@ export function App() {
     codex: ConversationMessage[]
   }>>({})
   const dark = themeMode === 'dark' || (themeMode === 'system' && systemDark)
+  const startupGreeting = useMemo(() => {
+    const key = `${GREETING_STORAGE_KEY}:${locale}`
+    const greeting = chooseGreeting(new Date(), localStorage.getItem(key) ?? undefined, Math.random, locale)
+    localStorage.setItem(key, greeting)
+    return greeting
+  }, [locale])
 
   const selectSession = useCallback((sessionId: string): void => {
     setPendingSession(undefined)
@@ -879,6 +889,7 @@ export function App() {
     try {
       if (selected) {
         codexRunningRef.current = true
+        setCodexEffectivePermission(item.permission)
         setCodexRunning(true)
         setCodexMessages(messages => [...messages, {
           id: optimisticId,
@@ -949,6 +960,7 @@ export function App() {
     codexRunningRef.current = false
     codexTurnIdRef.current = undefined
     setCodexRunning(false)
+    setCodexEffectivePermission(undefined)
     setCodexTurnId(undefined)
     const stateKey = selectedId ?? pendingSession?.key
     if (stateKey === undefined) {
@@ -1096,7 +1108,10 @@ export function App() {
         const drained = event.status === 'completed' && ownerSessionId !== undefined
           ? await drainCodexQueue(ownerSessionId, event.threadId)
           : false
-        if (targetsSelectedSession && !drained) setCodexRunning(false)
+        if (targetsSelectedSession && !drained) {
+          setCodexRunning(false)
+          setCodexEffectivePermission(undefined)
+        }
       })()
       return
     }
@@ -1105,6 +1120,7 @@ export function App() {
       codexRunningRef.current = false
       codexTurnIdRef.current = undefined
       setCodexRunning(false)
+      setCodexEffectivePermission(undefined)
       setCodexTurnId(undefined)
       setActionError(`Codex CLI：${event.message}`)
     }
@@ -1162,6 +1178,16 @@ export function App() {
     localStorage.setItem('dsh-workbench-inspector', String(inspectorOpen))
     localStorage.setItem('dsh-workbench-resume-last', String(resumeLastSession))
   }, [inspectorOpen, resumeLastSession, sidebarExpanded])
+
+  useEffect(() => {
+    const clamp = (): void => {
+      const maximum = Math.max(300, Math.min(720, window.innerWidth - (sidebarExpanded ? 520 : 330)))
+      setInspectorWidth(current => Math.min(maximum, Math.max(280, current)))
+    }
+    clamp()
+    window.addEventListener('resize', clamp)
+    return () => window.removeEventListener('resize', clamp)
+  }, [sidebarExpanded])
 
   useEffect(() => {
     let active = true
@@ -1888,6 +1914,29 @@ export function App() {
   const handleSend = async (requestedMode: 'queue' | 'steer' = 'queue'): Promise<void> => {
     const prompt = draft.trim()
     if ((prompt === '' && attachments.length === 0) || busy) return
+    const auditCommand = prompt.match(/^\/agent-room(?:\s+([\s\S]*))?$/i)
+    const followupCommand = prompt.match(/^\/room(?:\s+([\s\S]*))?$/i)
+    const directMention = selectedId === undefined || !prompt.startsWith('@')
+      ? undefined
+      : readAgentRoom(selectedId).agents.find(agent => {
+          const token = prompt.slice(1).split(/\s+/, 1)[0]?.toLocaleLowerCase()
+          return token !== undefined && token !== '' && (token === 'room' || agent.label.toLocaleLowerCase() === token || agent.label.toLocaleLowerCase().startsWith(token))
+        })
+    if (auditCommand !== null || followupCommand !== null || directMention !== undefined) {
+      if (selectedId === undefined || subagentView !== undefined) {
+        setActionError(tr('Select a main session before opening Agent Room.', '请先选择一个主线程，再打开 Agent Room。'))
+        return
+      }
+      const text = (auditCommand?.[1] ?? followupCommand?.[1] ?? '').trim()
+      setAgentRoomRequest({
+        id: crypto.randomUUID(),
+        kind: auditCommand !== null ? 'audit' : 'followup',
+        text: directMention === undefined ? text || (auditCommand !== null ? titleOf(selected) : '') : prompt,
+      })
+      setDraft('')
+      setInspectorOpen(true)
+      return
+    }
     const codexWasRunning = codexRunningRef.current
     const runningNow = codexActive
       ? codexRunningRef.current
@@ -1988,6 +2037,7 @@ export function App() {
           blocks: [{ kind: 'text', text: prompt }],
         }])
         codexRunningRef.current = true
+        setCodexEffectivePermission(codexPermission)
         setCodexRunning(true)
         const handoff = collectProviderHandoff(retainedDeepSeekMessages, codexSession.codexImportedHostSeq ?? 0)
         const result = await codexApi.prompt({
@@ -2070,6 +2120,7 @@ export function App() {
         codexRunningRef.current = false
         codexTurnIdRef.current = undefined
         setCodexRunning(false)
+        setCodexEffectivePermission(undefined)
         setCodexTurnId(undefined)
       }
       if (transition !== undefined) {
@@ -2203,7 +2254,7 @@ export function App() {
     const stateKey = selectedId ?? pendingSession?.key
     if (stateKey === undefined || busy || subagentView !== undefined) return
     if (codexActive) {
-      if (preset !== 'ask-for-approval' && preset !== 'approve-for-me' && preset !== 'full-access') return
+      if (preset !== 'read-only' && preset !== 'ask-for-approval' && preset !== 'approve-for-me' && preset !== 'full-access') return
       if (preset === codexPermission) return
       if (preset === 'full-access' && !window.confirm('Full access disables Codex approval prompts and filesystem sandboxing. Continue?')) return
       const permission = preset as CodexPermissionMode
@@ -2806,8 +2857,109 @@ export function App() {
     ? (selectedId === undefined ? [] : jobsBySession[selectedId] ?? [])
     : (jobsBySession[subagentView.childSessionId] ?? [])
 
+  const openAgentRoomFromMain = (): void => {
+    if (selectedId === undefined || subagentView !== undefined) {
+      setActionError(tr('Select a main session before opening Agent Room.', '请先选择一个主线程，再打开 Agent Room。'))
+      return
+    }
+    const recentUser = [...activeMessages].reverse().find(message => message.role === 'user')
+    const recentText = recentUser?.blocks.flatMap(block => block.kind === 'text' ? [block.text.trim()] : []).filter(Boolean).join('\n')
+    setAgentRoomRequest({
+      id: crypto.randomUUID(),
+      kind: 'audit',
+      text: recentText || activeTitle || tr('Audit the current thread', '审计当前主线程'),
+    })
+    setInspectorOpen(true)
+  }
+
+  const deliverAgentRoomReport = async (report: string, parentSessionId: string): Promise<void> => {
+    if (selectedId !== parentSessionId || subagentView !== undefined) throw new Error(tr('The parent session changed before the report could be returned.', '报告回注前主线程已经切换。'))
+    const sessionId = selectedId
+    const networkForTurn = effectiveNetworkMode(networkMode)
+    setConversationScrollRequest(current => current + 1)
+    if (!codexActive) {
+      await harnessApi.prompt(sessionId, [
+        { type: 'text', text: deepSeekNetworkPolicy(networkForTurn) },
+        { type: 'text', text: report },
+      ], 'queue')
+      void refreshChrome()
+      return
+    }
+    const current = presentedModels?.current
+    const cwd = activeWorkspace?.path ?? selected?.cwd ?? host?.cwd
+    if (current === undefined || cwd === undefined) throw new Error(tr('Codex model or work folder is unavailable.', 'Codex 模型或工作目录不可用。'))
+    if (codexRunningRef.current) {
+      const item: CodexQueuedPrompt = {
+        id: `agent-room-report-${crypto.randomUUID()}`,
+        prompt: report,
+        cwd,
+        model: current.model,
+        effort: current.reasoningEffort ?? 'medium',
+        permission: codexPermission,
+        network: networkForTurn,
+        createdAt: Date.now(),
+      }
+      updateCodexQueues(queues => ({ ...queues, [sessionId]: [...(queues[sessionId] ?? []), item].slice(-40) }))
+      return
+    }
+    const optimisticId = `agent-room-report-user-${Date.now()}`
+    setCodexMessages(currentMessages => [...currentMessages, {
+      id: optimisticId,
+      seq: (currentMessages.at(-1)?.seq ?? 0) + 1,
+      time: Date.now(),
+      role: 'user',
+      blocks: [{ kind: 'text', text: report }],
+    }])
+    codexRunningRef.current = true
+    setCodexRunning(true)
+    setCodexEffectivePermission(codexPermission)
+    try {
+      const result = await codexApi.prompt({
+        sessionId,
+        ...(codexSession.threadId === undefined ? {} : { threadId: codexSession.threadId }),
+        cwd,
+        model: current.model,
+        effort: current.reasoningEffort ?? 'medium',
+        permission: codexPermission,
+        network: networkForTurn,
+        prompt: report,
+      })
+      const next = { ...codexSession, active: true, threadId: result.threadId, model: current.model, effort: current.reasoningEffort ?? 'medium', permission: codexPermission }
+      setCodexSession(next)
+      writeCodexSession(sessionId, next)
+      codexTurnIdRef.current = result.turnId
+      setCodexTurnId(result.turnId)
+    } catch (reason) {
+      codexRunningRef.current = false
+      setCodexRunning(false)
+      setCodexEffectivePermission(undefined)
+      setCodexMessages(currentMessages => currentMessages.filter(message => message.id !== optimisticId))
+      throw reason
+    }
+  }
+
+  const handleInspectorResizeStart = (event: React.PointerEvent<HTMLDivElement>): void => {
+    event.preventDefault()
+    const pointerId = event.pointerId
+    event.currentTarget.setPointerCapture(pointerId)
+    const move = (next: PointerEvent): void => {
+      const maximum = Math.max(320, Math.min(720, window.innerWidth - (sidebarExpanded ? 520 : 330)))
+      setInspectorWidth(Math.min(maximum, Math.max(280, window.innerWidth - next.clientX - 8)))
+    }
+    const finish = (): void => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', finish)
+      setInspectorWidth(current => {
+        localStorage.setItem('dsh-workbench-inspector-width', String(current))
+        return current
+      })
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', finish, { once: true })
+  }
+
   return (
-    <div className="workbench" data-sidebar={sidebarExpanded ? 'expanded' : 'rail'} data-inspector={inspectorOpen}>
+    <div className="workbench" data-sidebar={sidebarExpanded ? 'expanded' : 'rail'} data-inspector={inspectorOpen} style={{ '--inspector-width': `${inspectorWidth}px` } as CSSProperties}>
       <Sidebar
         sessions={visibleSessions}
         workspaces={visibleWorkspaces}
@@ -2872,6 +3024,9 @@ export function App() {
             <button type="button" className="icon-button" onClick={() => { void refreshChrome(); void refreshCodexCatalog(true) }} aria-label="Refresh">
               <Icon name="refresh" size={15} />
             </button>
+            <button type="button" className="icon-button" onClick={openAgentRoomFromMain} disabled={selectedId === undefined || subagentView !== undefined} aria-label={tr('Create Agent Room audit', '创建 Agent Room 审计')} title={tr('Audit this thread in Agent Room', '在 Agent Room 中审计当前线程')}>
+              <Icon name="agent" size={15} />
+            </button>
             <button type="button" className="icon-button" data-active={terminalOpen} onClick={() => setTerminalOpen(value => !value)} aria-label="Toggle bottom panel" title={`Toggle bottom panel (${shortcutLabel('J')})`}>
               <Icon name="terminal" size={15} />
             </button>
@@ -2897,7 +3052,7 @@ export function App() {
           scrollToBottomRequest={conversationScrollRequest}
           title={activeTitle}
           workspace={currentFolder}
-          greeting={STARTUP_GREETING}
+          greeting={startupGreeting}
           hasMore={history.hasMore}
           loadingOlder={historyLoadingOlder}
           onLoadOlder={() => { void handleLoadOlder() }}
@@ -2952,6 +3107,10 @@ export function App() {
           subagentView={subagentView === undefined ? undefined : { id: subagentView.childSessionId, label: subagentView.label }}
           approvals={pendingApprovals}
           questions={pendingQuestions}
+          parentMessages={activeMessages}
+          hostPermission={permissions?.currentValue ?? pendingHostPermission}
+          effectivePermission={codexActive ? codexEffectivePermission ?? `${codexPermission} (${tr('next turn', '下一轮')})` : permissions?.currentValue ?? pendingHostPermission}
+          agentRoomRequest={agentRoomRequest}
           sidechat={{
             owner: sidechatOwner,
             parentTitle: selected === undefined ? undefined : titleOf(selected),
@@ -2982,6 +3141,14 @@ export function App() {
           onSidechatNetwork={handleSidechatNetwork}
           onGoalAction={action => { void handleGoalAction(action) }}
           onManagedHostSessions={handleManagedHostSessions}
+          onAgentRoomRequestHandled={requestId => setAgentRoomRequest(current => current?.id === requestId ? undefined : current)}
+          onAgentRoomReport={deliverAgentRoomReport}
+          onResizeStart={handleInspectorResizeStart}
+          onResizeBy={delta => setInspectorWidth(current => {
+            const next = Math.min(720, Math.max(280, current + delta))
+            localStorage.setItem('dsh-workbench-inspector-width', String(next))
+            return next
+          })}
           onClose={() => setInspectorOpen(false)}
           onRefresh={() => {
             void refreshChrome()
@@ -3054,6 +3221,8 @@ export function App() {
         connection={connection}
         offline={offline}
         fontStatus={fontStatus}
+        archivedSessions={visibleSessions.filter(session => archivedSessionIds.includes(session.sessionId) && !deletedSessionIds.has(session.sessionId))}
+        effectivePermission={codexActive ? codexEffectivePermission : permissions?.currentValue}
         onClose={() => setSettingsOpen(false)}
         onThemeMode={setThemeMode}
         onDensity={setDensity}
@@ -3073,6 +3242,8 @@ export function App() {
           void refreshCodexCatalog(true)
           if (selectedId !== undefined) void refreshSession(selectedId, { includeModels: true })
         }}
+        onArchivedSession={sessionId => { selectSession(sessionId); setSettingsOpen(false) }}
+        onArchivedMenu={session => { void handleSessionMenu(session) }}
       />
 
       <CommandPalette

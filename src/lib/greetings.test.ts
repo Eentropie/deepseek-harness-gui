@@ -18,4 +18,8 @@ describe('time-aware DeepSeek greetings', () => {
     expect(greetingsFor('evening')).toContain(next)
     expect(next).not.toBe(previous)
   })
+
+  it('returns time-aware Chinese copy when the UI locale changes', () => {
+    expect(chooseGreeting(new Date(2026, 7, 15, 23), undefined, () => 0, 'zh')).toContain('思考')
+  })
 })

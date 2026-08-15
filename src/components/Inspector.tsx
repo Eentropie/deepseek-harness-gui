@@ -4,7 +4,8 @@ import { ProviderLogo } from './ProviderLogo.tsx'
 import { InteractionPanel, type QuestionAnswer } from './InteractionPanel.tsx'
 import { ReviewPanel } from './ReviewPanel.tsx'
 import { SidechatPanel } from './SidechatPanel.tsx'
-import { AgentRoom } from './AgentRoom.tsx'
+import { AgentRoom, type AgentRoomRequest } from './AgentRoom.tsx'
+import { useI18n } from '../lib/i18n.tsx'
 import type { ActivityItem } from '../lib/history.ts'
 import type {
   ApprovalRequest,
@@ -35,6 +36,10 @@ interface InspectorProps {
   subagentView?: { id: string; label: string }
   approvals: ApprovalRequest[]
   questions: QuestionRequest[]
+  parentMessages: ConversationMessage[]
+  hostPermission?: string
+  effectivePermission?: string
+  agentRoomRequest?: AgentRoomRequest
   sidechat: {
     owner?: string
     parentTitle?: string
@@ -65,6 +70,10 @@ interface InspectorProps {
   onSidechatNetwork: (network: import('../lib/types.ts').NetworkMode) => void
   onGoalAction: (action: 'create' | 'edit' | 'pause' | 'resume' | 'complete' | 'clear') => void
   onManagedHostSessions: (sessionIds: string[]) => void
+  onAgentRoomRequestHandled: (requestId: string) => void
+  onAgentRoomReport: (report: string, parentSessionId: string) => Promise<void>
+  onResizeStart: (event: React.PointerEvent<HTMLDivElement>) => void
+  onResizeBy: (delta: number) => void
   onClose: () => void
   onRefresh: () => void
 }
@@ -96,6 +105,10 @@ export function Inspector({
   subagentView,
   approvals,
   questions,
+  parentMessages,
+  hostPermission,
+  effectivePermission,
+  agentRoomRequest,
   sidechat,
   onUseSkill,
   onOpenSubagent,
@@ -113,9 +126,14 @@ export function Inspector({
   onSidechatNetwork,
   onGoalAction,
   onManagedHostSessions,
+  onAgentRoomRequestHandled,
+  onAgentRoomReport,
+  onResizeStart,
+  onResizeBy,
   onClose,
   onRefresh,
 }: InspectorProps) {
+  const { tr } = useI18n()
   const [view, setView] = useState<InspectorView>('context')
   const reviewCount = approvals.length + questions.length
   const values = session?.projections?.values
@@ -132,12 +150,28 @@ export function Inspector({
     if (reviewCount > 0) setView('review')
   }, [reviewCount])
 
+  useEffect(() => {
+    if (agentRoomRequest !== undefined) setView('agents')
+  }, [agentRoomRequest])
+
   return (
-    <aside className="inspector" aria-label="Session side panel">
+    <aside className="inspector" aria-label={tr('Session side panel', '会话侧边栏')}>
+      <div
+        className="inspector-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={tr('Resize side panel', '调整侧边栏宽度')}
+        tabIndex={0}
+        onPointerDown={onResizeStart}
+        onKeyDown={event => {
+          if (event.key === 'ArrowLeft') { event.preventDefault(); onResizeBy(16) }
+          if (event.key === 'ArrowRight') { event.preventDefault(); onResizeBy(-16) }
+        }}
+      />
       <div className="inspector-header">
         <div>
-          <p>SIDE PANEL</p>
-          <h2>{viewLabels[view]}</h2>
+          <p>{tr('SIDE PANEL', '侧边栏')}</p>
+          <h2>{view === 'agents' ? 'Agent Room' : tr(viewLabels[view], view === 'context' ? '上下文' : view === 'review' ? '审查' : 'Sidechat')}</h2>
         </div>
         <div className="inspector-actions">
           {subagentView !== undefined && <button type="button" className="inspector-back" onClick={onExitSubagent}><Icon name="chevron-right" size={13} /> Parent</button>}
@@ -147,8 +181,8 @@ export function Inspector({
       </div>
 
       <nav className="inspector-tabs" aria-label="Side panel views">
-        <button type="button" data-active={view === 'context'} onClick={() => setView('context')} title="Context"><Icon name="sliders" size={14} /><span>Context</span></button>
-        <button type="button" data-active={view === 'review'} onClick={() => setView('review')} title="Review"><Icon name="document" size={14} /><span>Review</span>{reviewCount > 0 && <b>{reviewCount}</b>}</button>
+        <button type="button" data-active={view === 'context'} onClick={() => setView('context')} title={tr('Context', '上下文')}><Icon name="sliders" size={14} /><span>{tr('Context', '上下文')}</span></button>
+        <button type="button" data-active={view === 'review'} onClick={() => setView('review')} title={tr('Review', '审查')}><Icon name="document" size={14} /><span>{tr('Review', '审查')}</span>{reviewCount > 0 && <b>{reviewCount}</b>}</button>
         <button type="button" data-active={view === 'sidechat'} onClick={() => setView('sidechat')} title="Sidechat"><Icon name="sparkles" size={14} /><span>Sidechat</span></button>
         <button type="button" data-active={view === 'agents'} onClick={() => setView('agents')} title="Subagents"><Icon name="agent" size={14} /><span>Agents</span>{(subagents?.entries.length ?? 0) > 0 && <b>{subagents?.entries.length}</b>}</button>
       </nav>
@@ -202,11 +236,16 @@ export function Inspector({
         cwd={workspace?.path ?? session?.cwd ?? host?.cwd}
         agentPreset={session?.agentPreset}
         models={models}
+        parentMessages={parentMessages}
+        hostPermission={hostPermission}
+        request={agentRoomRequest}
         nativeSubagents={subagents}
         subagentView={subagentView}
         onOpenNative={onOpenSubagent}
         onExitNative={onExitSubagent}
         onManagedHostSessions={onManagedHostSessions}
+        onRequestHandled={onAgentRoomRequestHandled}
+        onDeliverReport={onAgentRoomReport}
       />
 
       {view === 'context' && (
@@ -219,6 +258,7 @@ export function Inspector({
                 <div><dt>Host</dt><dd>127.0.0.1:3080</dd></div>
                 <div><dt>Version</dt><dd>{host?.version ?? '—'}</dd></div>
                 <div><dt>Preset</dt><dd>{session?.agentPreset ?? '—'}</dd></div>
+                <div><dt>{tr('Permission', '权限')}</dt><dd>{effectivePermission ?? '—'}</dd></div>
               </dl>
             </div>
           </section>

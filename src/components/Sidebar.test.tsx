@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Sidebar } from './Sidebar.tsx'
 import type { SessionSummary, WorkspaceSummary } from '../lib/types.ts'
+import { I18nProvider } from '../lib/i18n.tsx'
 
 const sessions: SessionSummary[] = [
   { sessionId: 'active', updatedAt: 3, running: false, blank: false, agentPreset: 'active-preset' },
@@ -21,9 +22,10 @@ const workspaces: WorkspaceSummary[] = [{
 const noop = (): void => undefined
 
 describe('Sidebar archived sessions', () => {
-  it('shows archived chats in their own collapsed group and omits deleted chats', () => {
+  it('keeps archived chats out of the main sidebar and omits deleted chats', () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'en', setItem: noop })
     const markup = renderToStaticMarkup(
-      <Sidebar
+      <I18nProvider><Sidebar
         sessions={sessions}
         workspaces={workspaces}
         archivedSessionIds={['archived']}
@@ -45,13 +47,11 @@ describe('Sidebar archived sessions', () => {
         onWorkspaceMenu={noop}
         onMoveWorkspace={noop}
         onMoveSession={noop}
-      />,
+      /></I18nProvider>,
     )
 
-    expect(markup).toContain('Archived')
     expect(markup).toContain('active-preset')
     expect(markup).not.toContain('archived-preset')
     expect(markup).not.toContain('deleted-preset')
-    expect(markup).toContain('aria-expanded="false"')
   })
 })

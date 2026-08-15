@@ -1,6 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App.tsx'
+import { I18nProvider } from './lib/i18n.tsx'
 import './styles.css'
 
 if (window.dshDesktop !== undefined) {
@@ -13,6 +14,6 @@ if (root === null) throw new Error('Missing #root mount point')
 
 createRoot(root).render(
   <StrictMode>
-    <App />
+    <I18nProvider><App /></I18nProvider>
   </StrictMode>,
 )
