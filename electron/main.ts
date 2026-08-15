@@ -42,6 +42,12 @@ interface RpcEnvelope<T> {
 const APP_SCHEME = 'dsh-workbench'
 const APP_ORIGIN = `${APP_SCHEME}://app`
 const HOST_ORIGIN = resolveHostOrigin()
+const APP_NAME = 'DeepSeek Harness'
+
+// Keep Electron's internal/runtime name aligned with the packaged product.
+// The OS-level executable name is supplied by the branded package launcher.
+app.setName(APP_NAME)
+process.title = APP_NAME
 const ALLOWED_RPC_METHODS = new Set([
   'host.describe',
   'host.openPath',
@@ -823,7 +829,7 @@ function createMainWindow(initialSessionId?: string): BrowserWindow {
     minWidth: 960,
     minHeight: 680,
     show: false,
-    title: 'DeepSeek Harness',
+    title: APP_NAME,
     icon: appIconPath,
     backgroundColor: '#e7e7e7',
     ...(process.platform === 'darwin'
