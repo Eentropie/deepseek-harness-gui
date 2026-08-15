@@ -300,6 +300,12 @@ export interface ReviewDirectorySnapshot {
   truncated: boolean
 }
 
+export interface AgentWorkspaceResult {
+  cwd: string
+  isolated: boolean
+  reused: boolean
+}
+
 export interface ReviewDocument {
   path: string
   content: string

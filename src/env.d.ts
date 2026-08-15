@@ -13,6 +13,7 @@ import type {
   ReviewDocument,
   ReviewDirectorySnapshot,
   ReviewSnapshot,
+  AgentWorkspaceResult,
   SessionExportResult,
   SetupEvent,
   SetupSnapshot,
@@ -72,6 +73,7 @@ interface DeepSeekDesktopBridge {
   reviewRead: (input: { sessionId: string; cwd: string; path: string }) => Promise<ReviewDocument>
   reviewWrite: (input: { sessionId: string; cwd: string; path: string; content: string; expectedHash: string }) => Promise<ReviewDocument>
   reviewOpen: (input: { sessionId: string; cwd: string; path: string }) => Promise<{ opened: true }>
+  agentWorkspace: (input: { parentSessionId: string; cwd: string; agentId: string }) => Promise<AgentWorkspaceResult>
   connectionState: () => Promise<DesktopConnectionState>
   onDownlink: (listener: (frame: DownlinkFrame) => void) => () => void
   onConnectionState: (listener: (state: DesktopConnectionState) => void) => () => void

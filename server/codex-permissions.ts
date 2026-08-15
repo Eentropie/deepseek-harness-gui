@@ -3,13 +3,22 @@ import type { CodexPermissionMode } from '../src/lib/types.ts'
 interface CodexExecutionPolicy {
   approvalPolicy: 'on-request' | 'never'
   approvalsReviewer: 'user' | 'auto_review'
-  threadSandbox: 'workspace-write' | 'danger-full-access'
+  threadSandbox: 'read-only' | 'workspace-write' | 'danger-full-access'
   sandboxPolicy:
+    | { type: 'readOnly'; networkAccess: true }
     | { type: 'workspaceWrite'; writableRoots: string[]; networkAccess: true; excludeTmpdirEnvVar: false; excludeSlashTmp: false }
     | { type: 'dangerFullAccess' }
 }
 
 export function codexExecutionPolicy(mode: string, cwd: string): CodexExecutionPolicy {
+  if (mode === 'read-only') {
+    return {
+      approvalPolicy: 'on-request',
+      approvalsReviewer: 'user',
+      threadSandbox: 'read-only',
+      sandboxPolicy: { type: 'readOnly', networkAccess: true },
+    }
+  }
   if (mode === 'full-access') {
     return {
       approvalPolicy: 'never',

@@ -125,7 +125,7 @@ The right side panel shares one fixed area among four views:
 - **Context:** the complete runtime, token, session, task, goal, skills, and activity view.
 - **Review:** pending approvals plus a lazy, collapsible browser for the selected main chat's work folder. Select text files for Git diff reading and guarded editing; double-click or use the external-open control to launch any file with the operating system's associated app. Saves use an expected-content hash so a file changed by another process is not overwritten.
 - **Sidechat:** side threads are owned by the selected main chat. Switching the main chat switches its Sidechat collection; one main chat can keep multiple closable Sidechats, each with its own draft, transcript, model, reasoning effort, and permission mode. Orphaned local tabs are reconciled when their Host session or Codex thread no longer exists.
-- **Agents:** direct Subagent status and transcript navigation.
+- **Agent Room:** manually compose only the model sources that are already live through a configured Host API or the signed-in Codex subscription. Each participant keeps its own model, reasoning effort, permission, web mode, and role. The adversarial-audit template runs independent reviews, cross rebuttals, and a judge synthesis; review agents default to read-only, while write-enabled agents receive isolated Git worktrees. Harness-native Subagents remain visible below the desktop-managed room. Claude Code CLI is intentionally not adapted in this release.
 
 The bottom Terminal opens only in the center conversation column. Toggle it with the top-right layout control or `Command-J` / `Ctrl-J`.
 

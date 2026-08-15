@@ -463,6 +463,13 @@ export const reviewApi = {
   },
 }
 
+export const agentWorkspaceApi = {
+  ensure: (input: { parentSessionId: string; cwd: string; agentId: string }) => {
+    if (window.dshDesktop === undefined) return Promise.reject(new Error('Agent worktrees require the desktop app'))
+    return window.dshDesktop.agentWorkspace(input)
+  },
+}
+
 export const billingApi = {
   deepSeek: (): Promise<DeepSeekBillingSnapshot> => window.dshDesktop === undefined
     ? Promise.resolve({

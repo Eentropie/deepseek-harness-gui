@@ -46,6 +46,7 @@ import {
 import { permissionOverrideForNewSession } from './lib/session-permission.ts'
 import { deepSeekNetworkPolicy, isNetworkMode } from './lib/network-mode.ts'
 import { isPlaceholderSidechatTitle, reconcileSidechatThreads } from './lib/sidechat-state.ts'
+import { allManagedAgentHostSessionIds } from './lib/agent-room.ts'
 import { TrailingTask } from './lib/trailing-task.ts'
 import { platformBasename as basename, shortcutLabel } from './lib/platform.ts'
 import type {
@@ -416,6 +417,7 @@ export function App() {
   const [sidechatHostSessions, setSidechatHostSessions] = useState<Record<string, string>>(
     () => storedStringMap(SIDECHAT_HOST_STORAGE_KEY),
   )
+  const [agentRoomHostSessionIds, setAgentRoomHostSessionIds] = useState(() => allManagedAgentHostSessionIds())
   const [sidechatThreadsByParent, setSidechatThreadsByParent] = useState<Record<string, SidechatThreadSummary[]>>(readSidechatThreads)
   const [activeSidechatByParent, setActiveSidechatByParent] = useState<Record<string, string>>(
     () => storedStringMap(SIDECHAT_ACTIVE_STORAGE_KEY),
@@ -483,6 +485,14 @@ export function App() {
     })
   }, [])
 
+  const handleManagedHostSessions = useCallback((_sessionIds: string[]): void => {
+    const next = allManagedAgentHostSessionIds().sort()
+    setAgentRoomHostSessionIds(current => {
+      const previous = [...current].sort()
+      return previous.length === next.length && previous.every((id, index) => id === next[index]) ? current : next
+    })
+  }, [])
+
   const selected = useMemo(
     () => sessions.find(session => session.sessionId === selectedId),
     [selectedId, sessions],
@@ -492,8 +502,8 @@ export function App() {
     [selectedId, workspaces],
   )
   const hiddenSidechatSessionIds = useMemo(
-    () => new Set(Object.values(sidechatHostSessions)),
-    [sidechatHostSessions],
+    () => new Set([...Object.values(sidechatHostSessions), ...agentRoomHostSessionIds]),
+    [agentRoomHostSessionIds, sidechatHostSessions],
   )
   const visibleSessions = useMemo(
     () => sessions.filter(session => !hiddenSidechatSessionIds.has(session.sessionId)),
@@ -2971,6 +2981,7 @@ export function App() {
           onSidechatPermission={handleSidechatPermission}
           onSidechatNetwork={handleSidechatNetwork}
           onGoalAction={action => { void handleGoalAction(action) }}
+          onManagedHostSessions={handleManagedHostSessions}
           onClose={() => setInspectorOpen(false)}
           onRefresh={() => {
             void refreshChrome()

@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('dshDesktop', {
   reviewRead: (input: unknown) => ipcRenderer.invoke('dsh:review-read', input),
   reviewWrite: (input: unknown) => ipcRenderer.invoke('dsh:review-write', input),
   reviewOpen: (input: unknown) => ipcRenderer.invoke('dsh:review-open', input),
+  agentWorkspace: (input: unknown) => ipcRenderer.invoke('dsh:agent-workspace', input),
   connectionState: () => ipcRenderer.invoke('dsh:connection-state') as Promise<ConnectionState>,
   onDownlink: (listener: (frame: unknown) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, frame: unknown): void => listener(frame)

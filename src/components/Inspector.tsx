@@ -4,6 +4,7 @@ import { ProviderLogo } from './ProviderLogo.tsx'
 import { InteractionPanel, type QuestionAnswer } from './InteractionPanel.tsx'
 import { ReviewPanel } from './ReviewPanel.tsx'
 import { SidechatPanel } from './SidechatPanel.tsx'
+import { AgentRoom } from './AgentRoom.tsx'
 import type { ActivityItem } from '../lib/history.ts'
 import type {
   ApprovalRequest,
@@ -63,6 +64,7 @@ interface InspectorProps {
   onSidechatPermission: (permission: string) => void
   onSidechatNetwork: (network: import('../lib/types.ts').NetworkMode) => void
   onGoalAction: (action: 'create' | 'edit' | 'pause' | 'resume' | 'complete' | 'clear') => void
+  onManagedHostSessions: (sessionIds: string[]) => void
   onClose: () => void
   onRefresh: () => void
 }
@@ -80,7 +82,7 @@ const viewLabels: Record<InspectorView, string> = {
   context: 'Context',
   review: 'Review',
   sidechat: 'Sidechat',
-  agents: 'Subagents',
+  agents: 'Agent Room',
 }
 
 export function Inspector({
@@ -110,6 +112,7 @@ export function Inspector({
   onSidechatPermission,
   onSidechatNetwork,
   onGoalAction,
+  onManagedHostSessions,
   onClose,
   onRefresh,
 }: InspectorProps) {
@@ -192,26 +195,19 @@ export function Inspector({
         />
       )}
 
-      {view === 'agents' && (
-        <div className="inspector-scroll inspector-agents">
-          <div className="review-heading"><strong>Subagents</strong><span>{subagents?.entries.length ?? 0} direct</span></div>
-          {subagentView !== undefined && <div className="active-subagent"><Icon name="agent" size={15} /><div><strong>{subagentView.label}</strong><span>{subagentView.id.slice(0, 12)}</span></div><button type="button" onClick={onExitSubagent}>Back to parent</button></div>}
-          {subagents !== undefined && !subagents.parentAvailable && <p className="empty-activity">Parent runtime is unavailable; transcripts remain readable.</p>}
-          <div className="subagent-list">
-            {subagents === undefined || subagents.entries.length === 0 ? <div className="review-empty"><Icon name="agent" size={18} /><strong>No subagents yet</strong><span>Direct child agents created by this session will appear here with live status.</span></div> : subagents.entries.map(entry => (
-              entry.kind === 'diagnostic' ? (
-                <div className="subagent-row diagnostic" key={entry.id}><span><strong>{entry.id.slice(0, 8)}</strong><small>{entry.reason}</small></span></div>
-              ) : (
-                <button type="button" className="subagent-row" data-running={entry.activity === 'running'} key={entry.id} onClick={() => onOpenSubagent(entry)}>
-                  <i />
-                  <span><strong>{entry.label ?? 'One-shot subagent'}</strong><small>{entry.mode} · {entry.activity}{entry.hasChildren ? ' · nested' : ''}</small></span>
-                  <Icon name="chevron-right" size={12} />
-                </button>
-              )
-            ))}
-          </div>
-        </div>
-      )}
+      <AgentRoom
+        hidden={view !== 'agents'}
+        parentSessionId={session?.sessionId}
+        parentTitle={typeof session?.projections?.values.title === 'string' ? session.projections.values.title : undefined}
+        cwd={workspace?.path ?? session?.cwd ?? host?.cwd}
+        agentPreset={session?.agentPreset}
+        models={models}
+        nativeSubagents={subagents}
+        subagentView={subagentView}
+        onOpenNative={onOpenSubagent}
+        onExitNative={onExitSubagent}
+        onManagedHostSessions={onManagedHostSessions}
+      />
 
       {view === 'context' && (
         <div className="inspector-scroll">

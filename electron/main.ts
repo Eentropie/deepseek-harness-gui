@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { homedir } from 'node:os'
-import { readFile, readdir, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, extname, isAbsolute, join, normalize, relative, resolve } from 'node:path'
 import {
   app,
@@ -21,7 +21,7 @@ import { CodexAppServer } from './codex-app-server.ts'
 import { DeepSeekBillingService } from './deepseek-billing.ts'
 import { assertDesktopRpcPayload } from './rpc-policy.ts'
 import { SetupService } from './setup-service.ts'
-import type { ProviderHandoffMessage, ReviewDirectorySnapshot, ReviewDocument, ReviewSnapshot } from '../src/lib/types.ts'
+import type { AgentWorkspaceResult, ProviderHandoffMessage, ReviewDirectorySnapshot, ReviewDocument, ReviewSnapshot } from '../src/lib/types.ts'
 
 type ConnectionState = 'connecting' | 'connected' | 'reconnecting'
 
@@ -421,10 +421,10 @@ async function exportSessionLog(sessionId: string, includeDescendants: boolean):
 }
 
 async function assertCodexWorkspace(sessionId: string, cwd: string): Promise<void> {
+  const agentRoom = agentRoomIdentity(sessionId)
   const sidechatRemainder = sessionId.startsWith('sidechat:') ? sessionId.slice('sidechat:'.length) : undefined
-  const ownerSessionId = sidechatRemainder === undefined
-    ? sessionId
-    : sidechatRemainder.split(':', 1)[0] ?? sidechatRemainder
+  const ownerSessionId = agentRoom?.parentSessionId
+    ?? (sidechatRemainder === undefined ? sessionId : sidechatRemainder.split(':', 1)[0] ?? sidechatRemainder)
   const [sessionPage, workspacePage] = await Promise.all([
     hostRpc<{ items: Array<{ sessionId: string; cwd?: string }> }>('session.list', {}),
     hostRpc<{ items: Array<{ path: string; sessionIds: string[] }> }>('workspace.list', {}),
@@ -436,7 +436,14 @@ async function assertCodexWorkspace(sessionId: string, cwd: string): Promise<voi
   workspacePage.items.forEach(workspace => {
     if (workspace.sessionIds.includes(ownerSessionId)) allowed.add(workspace.path)
   })
-  if (!allowed.has(cwd)) throw new Error('Codex working directory is not owned by the selected Harness session')
+  if (allowed.has(cwd)) return
+  if (agentRoom !== undefined) {
+    for (const candidate of allowed) {
+      const expected = await agentWorktreePath(candidate, agentRoom.agentId).catch(() => undefined)
+      if (expected !== undefined && resolve(cwd) === resolve(expected)) return
+    }
+  }
+  throw new Error('Codex working directory is not owned by the selected Harness session')
 }
 
 async function canonicalTerminalDirectory(path: string): Promise<string> {
@@ -488,6 +495,51 @@ async function git(cwd: string, args: string[]): Promise<{ code: number; stdout:
     child.once('error', reject)
     child.once('close', code => resolvePromise({ code: code ?? 1, stdout, stderr }))
   })
+}
+
+function agentRoomIdentity(sessionId: string): { parentSessionId: string; agentId: string } | undefined {
+  if (!sessionId.startsWith('agent-room:')) return undefined
+  const remainder = sessionId.slice('agent-room:'.length)
+  const divider = remainder.indexOf(':')
+  if (divider <= 0) return undefined
+  const parentSessionId = remainder.slice(0, divider)
+  const agentId = remainder.slice(divider + 1)
+  if (!/^[a-zA-Z0-9._-]{1,256}$/.test(parentSessionId) || !/^[a-zA-Z0-9-]{1,96}$/.test(agentId)) return undefined
+  return { parentSessionId, agentId }
+}
+
+async function gitRoot(cwd: string): Promise<string> {
+  const canonical = await canonicalTerminalDirectory(cwd)
+  const result = await git(canonical, ['rev-parse', '--show-toplevel'])
+  if (result.code !== 0) throw new Error('Writable Agent Room agents require a Git workspace')
+  return realpath(result.stdout.trim())
+}
+
+async function agentWorktreePath(cwd: string, agentId: string): Promise<string> {
+  if (!/^[a-zA-Z0-9-]{1,96}$/.test(agentId)) throw new Error('Agent id is invalid')
+  const root = await gitRoot(cwd)
+  const workspaceKey = createHash('sha256').update(root).digest('hex').slice(0, 16)
+  return join(app.getPath('userData'), 'agent-worktrees', workspaceKey, agentId)
+}
+
+async function ensureAgentWorktree(parentSessionId: string, cwd: string, agentId: string): Promise<AgentWorkspaceResult> {
+  await assertCodexWorkspace(parentSessionId, cwd)
+  const root = await gitRoot(cwd)
+  const target = await agentWorktreePath(root, agentId)
+  await mkdir(dirname(target), { recursive: true, mode: 0o700 })
+  try {
+    const existing = await realpath(target)
+    const existingRoot = await git(existing, ['rev-parse', '--show-toplevel'])
+    if (existingRoot.code === 0 && resolve(existingRoot.stdout.trim()) === resolve(existing)) {
+      return { cwd: existing, isolated: true, reused: true }
+    }
+    throw new Error('The saved Agent Room worktree path is not a valid Git worktree')
+  } catch (reason) {
+    if (reason instanceof Error && reason.message === 'The saved Agent Room worktree path is not a valid Git worktree') throw reason
+  }
+  const created = await git(root, ['worktree', 'add', '--detach', target, 'HEAD'])
+  if (created.code !== 0) throw new Error(`Could not create the Agent Room worktree: ${created.stderr.trim() || 'git worktree add failed'}`)
+  return { cwd: await realpath(target), isolated: true, reused: false }
 }
 
 async function reviewEntryPath(cwd: string, requestedPath: string, allowRoot = false): Promise<{ root: string; target: string; path: string }> {
@@ -858,6 +910,15 @@ function installIpc(
     const cwd = requiredString(input['cwd'], 'review working directory')
     await assertCodexWorkspace(sessionId, cwd)
     return openReviewFile(cwd, requiredString(input['path'], 'review file path'))
+  })
+  ipcMain.handle('dsh:agent-workspace', async (event, raw: unknown) => {
+    assertTrustedSender(event)
+    const input = object(raw)
+    return ensureAgentWorktree(
+      requiredString(input['parentSessionId'], 'parent session id'),
+      requiredString(input['cwd'], 'agent working directory'),
+      requiredString(input['agentId'], 'agent id'),
+    )
   })
   ipcMain.handle('dsh:terminal-run', async (event, raw: unknown) => {
     assertTrustedSender(event)
