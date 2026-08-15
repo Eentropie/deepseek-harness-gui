@@ -22,8 +22,8 @@ The upstream checkout and its browser UI remain available at `http://127.0.0.1:3
 
 Use the [latest release](https://github.com/Eentropie/deepseek-harness-macos-gui/releases/latest):
 
-- **macOS Apple Silicon:** download the `DeepSeek-Harness-0.2.0-arm64.dmg` or `.zip` build and open `DeepSeek Harness.app`. An unsigned package may require Control-click → **Open** once.
-- **Windows x64:** download and run `DeepSeek-Harness-0.2.0-Windows-x64.exe`. The NSIS installer can choose the install directory and create desktop/Start-menu shortcuts. An unsigned package may show a Windows SmartScreen warning.
+- **macOS Apple Silicon:** download the `DeepSeek-Harness-0.2.1-arm64.dmg` or `.zip` build and open `DeepSeek Harness.app`. An unsigned package may require Control-click → **Open** once.
+- **Windows x64:** download and run `DeepSeek-Harness-0.2.1-Windows-x64.exe`. The NSIS installer can choose the install directory and create desktop/Start-menu shortcuts. An unsigned package may show a Windows SmartScreen warning.
 
 On first launch, the setup wizard checks Node.js, finds an existing Harness checkout or npm installation, can start the Local Host, configures write-only credentials for DeepSeek or any other Host provider, checks Codex CLI/login readiness, and runs a final environment check. Work-folder selection is intentionally left to the main window after setup.
 

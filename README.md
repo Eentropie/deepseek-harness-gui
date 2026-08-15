@@ -208,9 +208,9 @@ corepack pnpm dist:win
 Outputs are:
 
 - macOS unpacked: `release/mac-arm64/DeepSeek Harness.app`
-- macOS installer/archive: `release/DeepSeek-Harness-0.2.0-arm64.dmg` and `.zip`
+- macOS installer/archive: `release/DeepSeek-Harness-0.2.1-arm64.dmg` and `.zip`
 - Windows unpacked: `release/win-unpacked/DeepSeek Harness.exe`
-- Windows NSIS installer: `release/DeepSeek-Harness-0.2.0-Windows-x64.exe`
+- Windows NSIS installer: `release/DeepSeek-Harness-0.2.1-Windows-x64.exe`
 
 These local builds are unsigned. macOS may require Control-click → **Open** once. Windows SmartScreen may show an unrecognized-publisher warning; verify the package source and checksum before choosing **Run anyway**. Production distribution should use Apple Developer ID and Authenticode signing respectively.
 
