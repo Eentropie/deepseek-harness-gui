@@ -8,6 +8,18 @@ export interface QuestionAnswer {
   custom?: string
 }
 
+/** Remove the empty custom field: the Host treats it as a second answer on single-select questions. */
+export function normalizeQuestionAnswers(answers: QuestionAnswer[]): QuestionAnswer[] {
+  return answers.map(answer => {
+    const custom = answer.custom?.trim()
+    return {
+      id: answer.id,
+      selected: answer.selected,
+      ...(custom === undefined || custom === '' ? {} : { custom }),
+    }
+  })
+}
+
 interface InteractionPanelProps {
   approval?: ApprovalRequest
   question?: QuestionRequest
@@ -72,7 +84,7 @@ export function InteractionPanel({ approval, question, onApproval, onQuestion }:
           )
         })}
       </div>
-      <div className="interaction-actions"><button type="button" className="primary" disabled={!complete} onClick={() => onQuestion(question, question.questions.map(item => answers[item.id] ?? { id: item.id, selected: [] }))}>Submit answer</button></div>
+      <div className="interaction-actions"><button type="button" className="primary" disabled={!complete} onClick={() => onQuestion(question, normalizeQuestionAnswers(question.questions.map(item => answers[item.id] ?? { id: item.id, selected: [] })))}>Submit answer</button></div>
     </section>
   )
 }

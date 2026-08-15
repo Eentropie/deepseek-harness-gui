@@ -1211,6 +1211,7 @@ a:focus-visible {
 }
 
 .question-row {
+  min-width: 0;
   display: grid;
   gap: 4px;
 }
@@ -1235,9 +1236,12 @@ a:focus-visible {
 
 .question-row select,
 .question-row input {
-  width: min(480px, 100%);
+  width: 100%;
+  min-width: 0;
+  max-width: 480px;
   min-height: 28px;
   padding: 0 7px;
+  box-sizing: border-box;
   border: 1px solid var(--border);
   border-radius: 6px;
   outline: 0;
@@ -2304,9 +2308,14 @@ a:focus-visible {
 
 .inspector-review .interaction-actions,
 .inspector-review .question-list {
-  width: 100%;
+  width: calc(100% - 37px);
+  min-width: 0;
   margin-left: 37px;
   justify-content: flex-end;
+}
+
+.inspector-review .interaction-actions button {
+  max-width: 100%;
 }
 
 .review-more {

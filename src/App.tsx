@@ -42,6 +42,7 @@ import {
   pendingTurnReconciled,
   type PendingTurnTransition,
 } from './lib/pending-turn.ts'
+import { permissionOverrideForNewSession } from './lib/session-permission.ts'
 import { TrailingTask } from './lib/trailing-task.ts'
 import { platformBasename as basename, shortcutLabel } from './lib/platform.ts'
 import type {
@@ -1570,7 +1571,9 @@ export function App() {
     const submittedAttachments = attachments
     const wasPending = pendingSession !== undefined
     const pendingModel = presentedModels?.current
-    const pendingPermission = wasPending ? pendingHostPermission : undefined
+    const pendingPermission = wasPending
+      ? permissionOverrideForNewSession(pendingHostPermission, DEFAULT_HOST_PERMISSION)
+      : undefined
     const transition = codexActive
       ? undefined
       : createPendingTurn(sourceOwner, prompt, submittedAttachments, tailBeforeSend ?? -1)
