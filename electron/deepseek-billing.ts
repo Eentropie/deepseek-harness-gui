@@ -62,7 +62,7 @@ export class DeepSeekBillingService {
       throw new Error('The environment-owned DeepSeek API key cannot be replaced here')
     }
     if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error('Secure credential storage is unavailable on this Mac')
+      throw new Error('Operating-system secure credential storage is unavailable')
     }
     const key = validateDeepSeekApiKey(value)
     const encryptedKey = safeStorage.encryptString(key).toString('base64')
@@ -108,7 +108,7 @@ export class DeepSeekBillingService {
       return {
         configured: false,
         writable: false,
-        error: 'Secure credential storage is unavailable on this Mac',
+        error: 'Operating-system secure credential storage is unavailable',
       }
     }
     try {

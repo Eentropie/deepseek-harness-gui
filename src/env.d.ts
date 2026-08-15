@@ -17,6 +17,8 @@ type WorkspaceMenuAction = 'new-session' | 'rename' | 'reveal' | 'copy-working-d
 
 interface DeepSeekDesktopBridge {
   readonly runtime: 'electron'
+  readonly platform: 'darwin' | 'win32' | 'linux'
+  readonly arch: string
   rpc: <T>(method: string, payload: unknown) => Promise<T>
   plugins: () => Promise<PluginControlSnapshot>
   togglePlugin: (entryId: string, enabled: boolean) => Promise<PluginToggleResult>

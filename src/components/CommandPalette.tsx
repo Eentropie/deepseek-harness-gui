@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Icon, type IconName } from './Icon.tsx'
+import { platformBasename, shortcutLabel } from '../lib/platform.ts'
 import type { SessionSummary, WorkspaceSummary } from '../lib/types.ts'
 
 interface PaletteItem {
@@ -38,10 +39,6 @@ function sessionTitle(session: SessionSummary): string {
   return typeof value === 'string' && value.trim() !== '' ? value : 'New session'
 }
 
-function basename(path: string): string {
-  return path.split('/').filter(Boolean).at(-1) ?? path
-}
-
 export function CommandPalette({
   open,
   sessions,
@@ -73,27 +70,27 @@ export function CommandPalette({
     return [
       {
         id: 'action:new', label: 'New session', detail: 'Start in the current work folder',
-        section: 'Actions', icon: 'plus', shortcut: '⌘N', run: closeThen(onNew),
+        section: 'Actions', icon: 'plus', shortcut: shortcutLabel('N'), run: closeThen(onNew),
       },
       {
         id: 'action:folder', label: 'Open folder…', detail: 'Add or switch to a local work folder',
-        section: 'Actions', icon: 'folder-plus', shortcut: '⌘O', run: closeThen(onOpenFolder),
+        section: 'Actions', icon: 'folder-plus', shortcut: shortcutLabel('O'), run: closeThen(onOpenFolder),
       },
       {
         id: 'action:settings', label: 'Open Settings', detail: 'Appearance, layout, model, permissions, and Host',
-        section: 'Actions', icon: 'settings', shortcut: '⌘,', run: closeThen(onSettings),
+        section: 'Actions', icon: 'settings', shortcut: shortcutLabel(','), run: closeThen(onSettings),
       },
       {
         id: 'action:plugins', label: 'Manage plugins', detail: 'One-click profile enable and disable',
-        section: 'Actions', icon: 'plug', shortcut: '⌘⇧P', run: closeThen(onPlugins),
+        section: 'Actions', icon: 'plug', shortcut: shortcutLabel('P', true), run: closeThen(onPlugins),
       },
       {
         id: 'action:sidebar', label: sidebarExpanded ? 'Collapse sidebar' : 'Expand sidebar', detail: 'Adjust the workbench layout',
-        section: 'Actions', icon: 'panel-left', shortcut: '⌘B', run: closeThen(onSidebar),
+        section: 'Actions', icon: 'panel-left', shortcut: shortcutLabel('B'), run: closeThen(onSidebar),
       },
       {
         id: 'action:inspector', label: inspectorOpen ? 'Hide inspector' : 'Show inspector', detail: 'Context, tokens and activity',
-        section: 'Actions', icon: 'panel-right', shortcut: '⌘⇧I', run: closeThen(onInspector),
+        section: 'Actions', icon: 'panel-right', shortcut: shortcutLabel('I', true), run: closeThen(onInspector),
       },
       {
         id: 'action:theme', label: dark ? 'Use light appearance' : 'Use dark appearance', detail: 'Switch workbench theme',
@@ -112,7 +109,7 @@ export function CommandPalette({
         .map(session => ({
           id: `session:${session.sessionId}`,
           label: sessionTitle(session),
-          detail: `${session.agentPreset ?? 'standard'} · ${basename(session.cwd ?? 'Local')}`,
+          detail: `${session.agentPreset ?? 'standard'} · ${platformBasename(session.cwd) ?? 'Local'}`,
           section: 'Recent sessions' as const,
           icon: session.running ? 'activity' as const : 'terminal' as const,
           selected: session.sessionId === selectedId,
@@ -174,7 +171,7 @@ export function CommandPalette({
               }
             }}
           />
-          <kbd>⌘K</kbd>
+          <kbd>{shortcutLabel('K')}</kbd>
         </label>
 
         <div className="command-results">

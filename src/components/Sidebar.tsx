@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Icon } from './Icon.tsx'
 import { WhaleLogo } from './WhaleLogo.tsx'
+import { shortcutLabel } from '../lib/platform.ts'
 import type { SessionSearchHit, SessionSummary, WorkspaceSummary } from '../lib/types.ts'
 
 interface SidebarProps {
@@ -91,6 +92,9 @@ export function Sidebar({
   onMoveWorkspace,
   onMoveSession,
 }: SidebarProps) {
+  const openFolderShortcut = shortcutLabel('O')
+  const pluginShortcut = shortcutLabel('P', true)
+  const settingsShortcut = shortcutLabel(',')
   const [query, setQuery] = useState('')
   const [closedGroups, setClosedGroups] = useState<Set<string>>(new Set(['__archived__']))
   const [dragging, setDragging] = useState<DragPayload>()
@@ -232,10 +236,10 @@ export function Sidebar({
         {!collapsed && <span>New session</span>}
       </button>
 
-      <button type="button" className="open-folder" onClick={onOpenFolder} title="Open folder (⌘O)">
+      <button type="button" className="open-folder" onClick={onOpenFolder} title={`Open folder (${openFolderShortcut})`}>
         <Icon name="folder-plus" size={16} />
         {!collapsed && <span>Open folder…</span>}
-        {!collapsed && <kbd>⌘O</kbd>}
+        {!collapsed && <kbd>{openFolderShortcut}</kbd>}
       </button>
 
       {!collapsed && (
@@ -355,12 +359,12 @@ export function Sidebar({
       </div>
 
       <div className="sidebar-footer">
-        <button type="button" className="footer-button" onClick={onPlugins} title="Manage plugins (⌘⇧P)">
+        <button type="button" className="footer-button" onClick={onPlugins} title={`Manage plugins (${pluginShortcut})`}>
           <Icon name="plug" size={16} />
           {!collapsed && <span>Plugins</span>}
           {!collapsed && pluginCount !== undefined && <small className="footer-count">{pluginCount}</small>}
         </button>
-        <button type="button" className="footer-button" onClick={onSettings} title="Settings (⌘,)">
+        <button type="button" className="footer-button" onClick={onSettings} title={`Settings (${settingsShortcut})`}>
           <Icon name="settings" size={16} />
           {!collapsed && <span>Settings</span>}
         </button>

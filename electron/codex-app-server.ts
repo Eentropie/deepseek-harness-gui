@@ -12,6 +12,7 @@ import type {
 } from '../src/lib/types.ts'
 import { PROVIDER_HANDOFF_MARKER, providerHandoffText } from '../src/lib/provider-handoff.ts'
 import { codexSpawnEnvironment } from '../server/codex-launch.ts'
+import { codexExecutableCandidates, type CodexExecutableCandidate } from '../server/codex-executable.ts'
 import { codexExecutionPolicy } from '../server/codex-permissions.ts'
 import { normalizeCodexModels, normalizeCodexUsage, projectCodexThread } from '../server/codex-protocol.ts'
 
@@ -44,22 +45,19 @@ function requestId(value: unknown): string | number | undefined {
   return typeof value === 'string' || typeof value === 'number' ? value : undefined
 }
 
-async function codexExecutable(): Promise<string> {
-  const configured = process.env['DEEPSEEK_WORKBENCH_CODEX_BIN']
-  const candidates = [
-    ...(configured !== undefined && isAbsolute(configured) ? [configured] : []),
-    '/opt/homebrew/bin/codex',
-    '/usr/local/bin/codex',
-  ]
+async function codexExecutable(): Promise<CodexExecutableCandidate> {
+  const candidates = codexExecutableCandidates()
   for (const candidate of candidates) {
     try {
-      await access(candidate)
+      await access(candidate.path)
       return candidate
     } catch {
       // Keep looking through the fixed local installation candidates.
     }
   }
-  throw new Error('Codex CLI was not found in /opt/homebrew/bin or /usr/local/bin')
+  throw new Error(process.platform === 'win32'
+    ? 'Codex CLI was not found. Install Codex for Windows or set DEEPSEEK_WORKBENCH_CODEX_BIN to an absolute codex.exe/codex.cmd path.'
+    : 'Codex CLI was not found in the configured path, Homebrew locations, or PATH')
 }
 
 function errorMessage(error: unknown): string {
@@ -238,10 +236,10 @@ export class CodexAppServer {
     this.stopping = false
     this.stdout = ''
     this.stderr = ''
-    const child = spawn(executable, ['app-server', '--listen', 'stdio://'], {
+    const child = spawn(executable.path, ['app-server', '--listen', 'stdio://'], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: codexSpawnEnvironment(executable),
-      shell: false,
+      env: codexSpawnEnvironment(executable.path),
+      shell: executable.shell ? process.env['ComSpec'] ?? true : false,
     })
     this.process = child
     child.stdout.setEncoding('utf8')

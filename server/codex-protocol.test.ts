@@ -97,11 +97,22 @@ describe('Codex App Server protocol projection', () => {
   })
 
   it('adds Homebrew to the packaged CLI launch path', () => {
-    const environment = codexSpawnEnvironment('/opt/homebrew/bin/codex', { PATH: '/usr/bin:/bin' })
+    const environment = codexSpawnEnvironment('/opt/homebrew/bin/codex', { PATH: '/usr/bin:/bin' }, 'darwin')
     expect(environment['PATH']?.split(':').slice(0, 3)).toEqual([
       '/opt/homebrew/bin',
       '/usr/local/bin',
       '/usr/bin',
+    ])
+  })
+
+  it('uses Windows PATH delimiters without adding Unix-only directories', () => {
+    const environment = codexSpawnEnvironment('C:\\Users\\Ada\\AppData\\Roaming\\npm\\codex.cmd', {
+      PATH: 'C:\\Windows\\System32;C:\\Tools',
+    }, 'win32')
+    expect(environment['PATH']?.split(';')).toEqual([
+      'C:\\Users\\Ada\\AppData\\Roaming\\npm',
+      'C:\\Windows\\System32',
+      'C:\\Tools',
     ])
   })
 

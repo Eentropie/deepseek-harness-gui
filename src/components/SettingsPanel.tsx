@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Icon, type IconName } from './Icon.tsx'
 import { WhaleLogo } from './WhaleLogo.tsx'
+import { desktopArchitecture, desktopPlatform, platformDisplayName, shortcutLabel } from '../lib/platform.ts'
 import { AgentPresetsSettings } from './AgentPresetsSettings.tsx'
 import { HarnessSettings } from './HarnessSettings.tsx'
 import { ModelsCredentialsSettings } from './ModelsCredentialsSettings.tsx'
@@ -114,16 +115,18 @@ function Segmented<T extends string>({ value, values, label, onChange }: {
   )
 }
 
-const shortcuts = [
-  ['⌘K', 'Open command palette'],
-  ['⌘O', 'Add or switch work folder'],
-  ['⌘N', 'Create a new session'],
-  ['⌘B', 'Collapse or expand sidebar'],
-  ['⌘⇧I', 'Hide or show inspector'],
-  ['⌘⇧P', 'Open plugin manager'],
-  ['⌘,', 'Open Settings'],
-  ['Esc', 'Close the active overlay'],
-]
+function platformShortcuts(): string[][] {
+  return [
+    [shortcutLabel('K'), 'Open command palette'],
+    [shortcutLabel('O'), 'Add or switch work folder'],
+    [shortcutLabel('N'), 'Create a new session'],
+    [shortcutLabel('B'), 'Collapse or expand sidebar'],
+    [shortcutLabel('I', true), 'Hide or show inspector'],
+    [shortcutLabel('P', true), 'Open plugin manager'],
+    [shortcutLabel(','), 'Open Settings'],
+    ['Esc', 'Close the active overlay'],
+  ]
+}
 
 export function SettingsPanel({
   open,
@@ -170,6 +173,10 @@ export function SettingsPanel({
   const efforts = currentModel?.reasoning?.efforts ?? []
   const enabledPlugins = plugins?.entries.filter(entry => entry.enabled).length ?? 0
   const switchablePlugins = plugins?.entries.filter(entry => entry.controllable).length ?? 0
+  const platform = desktopPlatform()
+  const platformName = platformDisplayName()
+  const architecture = desktopArchitecture()
+  const shortcuts = platformShortcuts()
 
   useEffect(() => {
     if (!open) return
@@ -187,7 +194,7 @@ export function SettingsPanel({
     : fontStatus === 'sans'
       ? 'Local Sans active · Serif fallback'
       : fontStatus === 'fallback'
-        ? 'SF Pro / system fallback active'
+        ? platform === 'win32' ? 'Segoe UI / system fallback active' : 'SF Pro / system fallback active'
         : 'Checking local typefaces…'
 
   return (
@@ -238,7 +245,7 @@ export function SettingsPanel({
               <section className="settings-page">
                 <div className="settings-page-heading"><p>INTERFACE</p><h3>Appearance</h3><span>Theme mode, density, typography, and motion.</span></div>
                 <div className="settings-card">
-                  <Row title="Color mode" detail="System follows the current macOS appearance.">
+                  <Row title="Color mode" detail="System follows the current operating-system appearance.">
                     <Segmented
                       value={themeMode}
                       label="Color mode"
@@ -374,12 +381,12 @@ export function SettingsPanel({
                 <div className="settings-page-heading"><p>LOCAL DESKTOP CLIENT</p><h3>About</h3><span>Independent companion UI for DeepSeek Harness.</span></div>
                 <div className="settings-about">
                   <div className="settings-about-whale"><WhaleLogo size={38} /></div>
-                  <div><strong>DeepSeek Harness</strong><span>Version 0.1.0 · macOS arm64</span></div>
+                  <div><strong>DeepSeek Harness</strong><span>Version 0.1.2 · {platformName} {architecture}</span></div>
                 </div>
                 <div className="settings-card">
                   <Row title="Host source" detail="The upstream repository and localhost UI are not modified."><span className="settings-state">Untouched</span></Row>
                   <Row title="Renderer security" detail="Context isolation, sandbox, no Node integration, allowlisted IPC."><span className="settings-state">Restricted</span></Row>
-                  <Row title="Signing" detail="Local ad-hoc development build; no Apple Developer identity."><span className="settings-state">Unsigned</span></Row>
+                  <Row title="Signing" detail={platform === 'win32' ? 'Local development build; no Authenticode certificate.' : 'Local development build; no platform signing identity.'}><span className="settings-state">Unsigned</span></Row>
                 </div>
               </section>
             )}

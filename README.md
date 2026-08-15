@@ -1,13 +1,13 @@
 # DeepSeek Harness
 
-DeepSeek Harness is a standalone macOS desktop GUI for a local DeepSeek Harness Host. It keeps the upstream Harness repository and its original `http://127.0.0.1:3080` web interface unchanged.
+DeepSeek Harness is a standalone macOS and Windows desktop GUI for a local DeepSeek Harness Host. It keeps the upstream Harness repository and its original `http://127.0.0.1:3080` web interface unchanged.
 
 ## What is included
 
 - Local desktop window with no browser dependency
 - Work-folder and session switcher
 - Native workspace/session menus, drag reordering, pin/unread state, and a collapsed Archived section
-- Native macOS folder picker
+- Native operating-system folder picker
 - Command palette and keyboard shortcuts
 - Model, reasoning-effort, and permission controls
 - DeepSeek plus account-scoped ChatGPT/Codex models through the local Codex CLI login
@@ -17,7 +17,7 @@ DeepSeek Harness is a standalone macOS desktop GUI for a local DeepSeek Harness 
 - Full Settings center for startup, layout, appearance, model, permissions, plugins, Host status, shortcuts, and app information
 - System, light, and dark appearance modes with comfortable or compact density
 
-The visual system uses only black, white, and neutral grays. On this Mac, the desktop runtime reads the already-installed UI Sans and Serif variable fonts through fixed, read-only font routes. The font files are not copied into this project or the application package. SF Pro and New York-style system fonts are the automatic fallbacks when those local sources are unavailable.
+The visual system uses only black, white, and neutral grays. On macOS, the desktop runtime can read already-installed UI Sans and Serif variable fonts through fixed, read-only font routes. The font files are not copied into this project or the application package. Windows uses Segoe UI Variable and the configured system Serif fallback when those local sources are unavailable.
 
 ## Run it
 
@@ -32,6 +32,15 @@ Then open the desktop application:
 
 ```sh
 open "release/mac-arm64/DeepSeek Harness.app"
+```
+
+On Windows, start the same Host from PowerShell and then run either the installed app or the unpacked build:
+
+```powershell
+Set-Location C:\path\to\deepseek-harness
+corepack pnpm dsh web
+
+& ".\release\win-unpacked\DeepSeek Harness.exe"
 ```
 
 The desktop app talks only to the local Host at `127.0.0.1:3080`. It does not replace or patch that Host.
@@ -49,7 +58,7 @@ Changing the model or reasoning effort takes effect on the next turn and does no
 
 ## Work folders
 
-Choose **Open folder…** in the sidebar or press `Command-O`. The native folder picker registers the selected path as a Harness workspace and opens its most recent session. If the folder has no session yet, the app creates one blank session. Click any folder heading in the sidebar, or use `Command-K`, to switch later.
+Choose **Open folder…** in the sidebar or press `Command-O` on macOS / `Ctrl+O` on Windows. The native folder picker registers the selected path as a Harness workspace and opens its most recent session. If the folder has no session yet, the app creates one blank session. Click any folder heading in the sidebar, or use the command palette, to switch later.
 
 ## Session management
 
@@ -93,7 +102,7 @@ Shipped presets can be viewed read-only or copied. A copy is created by the Host
 Choose **Settings**, click the gear button, select it from `Command-K`, or press `Command-,`. Preferences apply immediately and persist locally.
 
 - **General:** resume the last session, choose the default sidebar and inspector state, and open or switch the current work folder.
-- **Appearance:** follow the macOS theme or force light/dark mode, select comfortable/compact density, enable Serif assistant responses, and reduce motion.
+- **Appearance:** follow the operating-system theme or force light/dark mode, select comfortable/compact density, enable Serif assistant responses, and reduce motion.
 - **Model & permissions:** choose the active session model, reasoning effort, and permission preset.
 - **Models & credentials:** inspect every Host provider route, activate additional adapters, safely set or remove write-only API keys, override endpoints, and discover advertised models without changing configuration.
 - **Harness settings:** edit every namespace exposed by the live redacted Host schema with per-field reset, revision checks, and restart/live-apply labels.
@@ -119,19 +128,29 @@ Stored credentials are never read into the renderer. The Host returns only wheth
 | `Command-Shift-P` | Open plugin manager |
 | `Escape` | Close the active overlay |
 
+On Windows, replace `Command` with `Ctrl`; the application displays the platform-correct labels automatically.
+
 ## Build and verify
 
 ```sh
-cd /path/to/deepseek-harness-macos-gui
+cd /path/to/deepseek-harness-gui
 corepack pnpm install
 corepack pnpm check
 corepack pnpm test
 corepack pnpm pack:mac
+corepack pnpm pack:win
+corepack pnpm dist:win
 ```
 
-The output is `release/mac-arm64/DeepSeek Harness.app`.
+Outputs are:
 
-This local build is not signed with an Apple Developer certificate. If macOS quarantines a copied build, Control-click the app and choose **Open** once. Do not disable Gatekeeper globally.
+- macOS: `release/mac-arm64/DeepSeek Harness.app`
+- Windows unpacked: `release/win-unpacked/DeepSeek Harness.exe`
+- Windows installer configuration: run `pnpm dist:win` on a Windows x64 build host to produce `release/DeepSeek-Harness-0.1.2-Windows-x64.exe`
+
+These local builds are unsigned. macOS may require Control-click → **Open** once. Windows SmartScreen may show an unrecognized-publisher warning; verify the package source and checksum before choosing **Run anyway**. Production distribution should use Apple Developer ID and Authenticode signing respectively.
+
+For complete Windows installation, Host, Codex CLI, security, and validation notes, see [WINDOWS.md](./WINDOWS.md).
 
 ## Configuration touched by plugin toggles
 

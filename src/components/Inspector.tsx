@@ -10,6 +10,7 @@ import type {
   SubagentEntry,
   WorkspaceSummary,
 } from '../lib/types.ts'
+import { platformBasename } from '../lib/platform.ts'
 
 interface InspectorProps {
   host?: HostDescription
@@ -95,7 +96,7 @@ export function Inspector({ host, session, workspace, models, activity, skills, 
           <div className="section-heading"><span>Session</span></div>
           <dl className="detail-list roomy">
             <div><dt>Workspace</dt><dd title={workspace?.path}>{workspace?.title ?? 'Ungrouped'}</dd></div>
-            <div><dt>Directory</dt><dd title={session?.cwd}>{session?.cwd?.split('/').at(-1) ?? host?.cwd.split('/').at(-1) ?? '—'}</dd></div>
+            <div><dt>Directory</dt><dd title={session?.cwd}>{platformBasename(session?.cwd) ?? platformBasename(host?.cwd) ?? '—'}</dd></div>
             <div><dt>Turns</dt><dd>{stats?.turns ?? 0}</dd></div>
             <div><dt>Steps</dt><dd>{stats?.steps ?? 0}</dd></div>
             <div><dt>Model time</dt><dd>{duration(stats?.llmMs ?? 0)}</dd></div>

@@ -39,6 +39,7 @@ import {
   type PendingTurnTransition,
 } from './lib/pending-turn.ts'
 import { TrailingTask } from './lib/trailing-task.ts'
+import { platformBasename as basename, shortcutLabel } from './lib/platform.ts'
 import type {
   GoalProjection,
   HistoryPage,
@@ -149,11 +150,6 @@ function writeCodexSession(sessionId: string, state: CodexSessionState): void {
 function titleOf(session?: SessionSummary): string {
   const title = session?.projections?.values.title
   return typeof title === 'string' && title.trim() !== '' ? title : 'New session'
-}
-
-function basename(path?: string): string | undefined {
-  if (path === undefined) return undefined
-  return path.split('/').filter(Boolean).at(-1)
 }
 
 function errorText(reason: unknown): string {
@@ -1941,13 +1937,13 @@ export function App() {
             )}
             <JobDock jobs={activeJobs} />
             <button type="button" className="quick-command" onClick={() => setCommandsOpen(true)} aria-label="Open quick commands">
-              <Icon name="search" size={13} /><span>Commands</span><kbd>⌘K</kbd>
+              <Icon name="search" size={13} /><span>Commands</span><kbd>{shortcutLabel('K')}</kbd>
             </button>
             <span className="connection-pill" data-state={offline ? 'offline' : connection}>
               <i />
               {codexActive ? 'Codex CLI' : offline ? 'Host offline' : connection === 'connected' ? 'Local' : connection}
             </span>
-            <button type="button" className="icon-button" onClick={openSettings} aria-label="Open Settings" title="Settings (⌘,)">
+            <button type="button" className="icon-button" onClick={openSettings} aria-label="Open Settings" title={`Settings (${shortcutLabel(',')})`}>
               <Icon name="settings" size={15} />
             </button>
             <button type="button" className="icon-button" onClick={() => { void refreshChrome(); void refreshCodexCatalog(true) }} aria-label="Refresh">

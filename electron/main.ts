@@ -100,6 +100,7 @@ const LOCAL_FONT_FILES = new Map([
   ['/local-font/workbench-serif-roman.ttf', '/Applications/Claude.app/Contents/Resources/fonts/AnthropicSerif-Romans-Variable-25x258.ttf'],
   ['/local-font/workbench-serif-italic.ttf', '/Applications/Claude.app/Contents/Resources/fonts/AnthropicSerif-Italics-Variable-25x258.ttf'],
 ])
+const FILE_MANAGER_NAME = process.platform === 'win32' ? 'Explorer' : process.platform === 'darwin' ? 'Finder' : 'file manager'
 
 protocol.registerSchemesAsPrivileged([{
   scheme: APP_SCHEME,
@@ -484,7 +485,7 @@ function installIpc(
       ...(state['archived'] === true ? [] : [{ id: 'archive' as const, label: 'Archive chat' }]),
       { id: 'toggle-unread', label: state['unread'] ? 'Mark as read' : 'Mark as unread' },
       'separator',
-      { id: 'reveal', label: 'Reveal in Finder' },
+      { id: 'reveal', label: `Reveal in ${FILE_MANAGER_NAME}` },
       { id: 'copy-working-directory', label: 'Copy working directory' },
       { id: 'copy-session-id', label: 'Copy session ID' },
       { id: 'copy-deeplink', label: 'Copy deeplink' },
@@ -501,7 +502,7 @@ function installIpc(
       { id: 'new-session', label: 'New chat' },
       { id: 'rename', label: 'Rename work folder' },
       'separator',
-      { id: 'reveal', label: 'Reveal in Finder' },
+      { id: 'reveal', label: `Reveal in ${FILE_MANAGER_NAME}` },
       { id: 'copy-working-directory', label: 'Copy working directory' },
       { id: 'open-new-window', label: 'Open in new window' },
       'separator',
@@ -584,6 +585,14 @@ function installIpc(
 const downlinkClients = new Map<number, DownlinkClient>()
 const pendingDeeplinks: string[] = []
 
+function sessionIdFromArguments(argv: string[]): string | undefined {
+  for (const argument of argv) {
+    const sessionId = sessionIdFromDeeplink(argument)
+    if (sessionId !== undefined) return sessionId
+  }
+  return undefined
+}
+
 function createMainWindow(initialSessionId?: string): BrowserWindow {
   const window = new BrowserWindow({
     width: 1440,
@@ -593,8 +602,9 @@ function createMainWindow(initialSessionId?: string): BrowserWindow {
     show: false,
     title: 'DeepSeek Harness',
     backgroundColor: '#e7e7e7',
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 15, y: 17 },
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 15, y: 17 } }
+      : { titleBarStyle: 'default' as const, autoHideMenuBar: true }),
     webPreferences: {
       preload: join(app.getAppPath(), 'dist-electron', 'preload.cjs'),
       contextIsolation: true,
@@ -646,6 +656,27 @@ function createMainWindow(initialSessionId?: string): BrowserWindow {
 }
 
 let codexServer: CodexAppServer | undefined
+const singleInstanceLock = app.requestSingleInstanceLock()
+
+const startupSessionId = sessionIdFromArguments(process.argv)
+if (startupSessionId !== undefined) pendingDeeplinks.push(startupSessionId)
+
+app.on('second-instance', (_event, argv) => {
+  const sessionId = sessionIdFromArguments(argv)
+  if (sessionId !== undefined) {
+    if (app.isReady()) createMainWindow(sessionId)
+    else pendingDeeplinks.push(sessionId)
+    return
+  }
+  const window = BrowserWindow.getAllWindows().at(-1)
+  if (window === undefined) {
+    if (app.isReady()) createMainWindow()
+    return
+  }
+  if (window.isMinimized()) window.restore()
+  window.show()
+  window.focus()
+})
 
 app.on('open-url', (event, url) => {
   event.preventDefault()
@@ -655,7 +686,9 @@ app.on('open-url', (event, url) => {
   else pendingDeeplinks.push(sessionId)
 })
 
-app.whenReady().then(async () => {
+if (!singleInstanceLock) {
+  app.quit()
+} else app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
   await installAppProtocol()
   const controller = new PluginController()

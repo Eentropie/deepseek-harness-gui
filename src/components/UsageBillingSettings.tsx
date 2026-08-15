@@ -206,7 +206,7 @@ export function UsageBillingSettings({ active }: UsageBillingSettingsProps) {
             <span>{deepSeek?.source === 'environment'
               ? 'Owned by the app environment; it cannot be changed here.'
               : deepSeek?.source === 'secure-storage'
-                ? 'Encrypted with macOS secure storage. The key is never shown again.'
+                ? 'Encrypted with operating-system secure storage. The key is never shown again.'
                 : hostCredential?.configured === true
                   ? 'The Host has a value-free credential reference. Add the same key once for this isolated balance connector.'
                   : 'Used only with the fixed DeepSeek balance endpoint.'}</span>

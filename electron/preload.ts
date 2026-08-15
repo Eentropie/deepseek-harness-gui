@@ -4,6 +4,8 @@ type ConnectionState = 'connecting' | 'connected' | 'reconnecting'
 
 contextBridge.exposeInMainWorld('dshDesktop', {
   runtime: 'electron',
+  platform: process.platform,
+  arch: process.arch,
   rpc: (method: string, payload: unknown) => ipcRenderer.invoke('dsh:rpc', method, payload),
   plugins: () => ipcRenderer.invoke('dsh:plugins'),
   togglePlugin: (entryId: string, enabled: boolean) => ipcRenderer.invoke('dsh:toggle-plugin', entryId, enabled),
