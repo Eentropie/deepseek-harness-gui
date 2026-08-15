@@ -22,6 +22,7 @@ interface SidechatPanelProps {
   onStop: () => void
   onNewThread: () => void
   onThread: (threadId: string) => void
+  onCloseThread: (threadId: string) => void
   onModel: (provider: string, model: string) => void
   onEffort: (effort: string) => void
   onPermission: (permission: string) => void
@@ -41,7 +42,7 @@ function SidechatBlock({ block }: { block: MessageBlock }) {
   return null
 }
 
-export function SidechatPanel({ owner, parentTitle, threads, activeThreadId, provider, models, permissionOptions, permission, network, messages, running, error, onSend, onStop, onNewThread, onThread, onModel, onEffort, onPermission, onNetwork }: SidechatPanelProps) {
+export function SidechatPanel({ owner, parentTitle, threads, activeThreadId, provider, models, permissionOptions, permission, network, messages, running, error, onSend, onStop, onNewThread, onThread, onCloseThread, onModel, onEffort, onPermission, onNetwork }: SidechatPanelProps) {
   const [draft, setDraft] = useState(() => localStorage.getItem(draftKey(owner)) ?? '')
   const scroll = useRef<HTMLDivElement>(null)
   const textarea = useRef<HTMLTextAreaElement>(null)
@@ -71,10 +72,13 @@ export function SidechatPanel({ owner, parentTitle, threads, activeThreadId, pro
   return (
     <div className="sidechat-panel">
       <div className="sidechat-thread-bar">
-        <div role="tablist" aria-label="Sidechat threads">{threads.map(thread => <button type="button" role="tab" aria-selected={thread.id === activeThreadId} data-active={thread.id === activeThreadId} title={thread.title} key={thread.id} onClick={() => onThread(thread.id)}>{thread.title}</button>)}</div>
-        <button type="button" className="icon-button quiet" onClick={onNewThread} disabled={owner === undefined} title="New sidechat" aria-label="New sidechat"><Icon name="plus" size={13} /></button>
+        <div role="tablist" aria-label="Sidechat threads">{threads.map(thread => <div className="sidechat-thread-tab" data-active={thread.id === activeThreadId} key={thread.id}>
+          <button type="button" className="sidechat-thread-select" role="tab" aria-selected={thread.id === activeThreadId} title={thread.title} onClick={() => onThread(thread.id)}>{thread.title}</button>
+          <button type="button" className="sidechat-thread-close" title={`Close ${thread.title}`} aria-label={`Close ${thread.title}`} onClick={() => onCloseThread(thread.id)}><Icon name="x" size={10} /></button>
+        </div>)}</div>
+        <button type="button" className="icon-button quiet" onClick={onNewThread} disabled={parentTitle === undefined} title="New sidechat" aria-label="New sidechat"><Icon name="plus" size={13} /></button>
       </div>
-      <div className="sidechat-status"><span><i data-running={running} />{provider}</span><small>{parentTitle === undefined ? 'Open a main chat to begin' : `Following ${parentTitle}`}</small></div>
+      {owner !== undefined && <><div className="sidechat-status"><span><i data-running={running} />{provider}</span><small>{`Following ${parentTitle ?? 'main task'}`}</small></div>
       <div className="sidechat-controls">
         <label title="Sidechat model"><ProviderLogo provider={models?.current.provider} name={currentModel?.name} size={13} /><select value={models === undefined ? '' : `${models.current.provider}\u0000${models.current.model}`} disabled={models === undefined || owner === undefined} onChange={event => {
           const [nextProvider, nextModel] = event.target.value.split('\u0000')
@@ -85,9 +89,11 @@ export function SidechatPanel({ owner, parentTitle, threads, activeThreadId, pro
         {efforts.length > 0 && <label title="Reasoning effort"><Icon name="sparkles" size={12} /><select value={models?.current.reasoningEffort ?? currentModel?.reasoning?.defaultEffort ?? ''} onChange={event => onEffort(event.target.value)}>{efforts.map(effort => <option value={effort.id} key={effort.id}>{effort.name}</option>)}</select></label>}
         {permissionOptions.length > 0 && <label title="Permission"><Icon name="lock" size={12} /><select value={permission ?? ''} onChange={event => onPermission(event.target.value)}>{permissionOptions.map(option => <option value={option.value} key={option.value}>{option.name}</option>)}</select></label>}
         <label title={`${models?.current.provider === 'codex-cli' ? 'Codex' : 'Host'} web access`}><Icon name="globe" size={12} /><select value={network} onChange={event => onNetwork(event.target.value as NetworkMode)}><option value="off">Web off</option><option value="auto">Web auto · {models?.current.provider === 'codex-cli' ? 'Codex' : 'Host'}</option><option value="ask">Ask before web</option></select></label>
-      </div>
+      </div></>}
       <div className="sidechat-messages" ref={scroll}>
-        {messages.length === 0 && (
+        {owner === undefined ? (
+          <div className="sidechat-empty sidechat-empty-closed"><Icon name="sparkles" size={18} /><strong>{parentTitle === undefined ? 'Open a main chat to begin' : 'No sidechats open'}</strong><span>{parentTitle === undefined ? 'Select a main task before starting a side thread.' : 'Create a sidechat when you want a separate explanation, alternative, or second opinion.'}</span>{parentTitle !== undefined && <button type="button" onClick={onNewThread}><Icon name="plus" size={12} /> New sidechat</button>}</div>
+        ) : messages.length === 0 && (
           <div className="sidechat-empty"><Icon name="sparkles" size={18} /><strong>Ask alongside the main task</strong><span>Use this thread for a quick explanation, alternative, or second opinion.</span></div>
         )}
         {messages.map(message => (
@@ -98,8 +104,8 @@ export function SidechatPanel({ owner, parentTitle, threads, activeThreadId, pro
         ))}
         {running && <div className="sidechat-thinking"><i /><i /><i /><span>Working in sidechat…</span></div>}
       </div>
-      {error !== undefined && <div className="sidechat-error">{error}</div>}
-      <div className="sidechat-composer">
+      {owner !== undefined && error !== undefined && <div className="sidechat-error">{error}</div>}
+      {owner !== undefined && <div className="sidechat-composer">
         <textarea
           ref={textarea}
           value={draft}
@@ -117,7 +123,7 @@ export function SidechatPanel({ owner, parentTitle, threads, activeThreadId, pro
           ? <button type="button" onClick={onStop}><Icon name="stop" size={11} /> Stop</button>
           : <button type="button" className="primary" disabled={draft.trim() === '' || owner === undefined} onClick={send}>Send</button>}
         </div>
-      </div>
+      </div>}
     </div>
   )
 }

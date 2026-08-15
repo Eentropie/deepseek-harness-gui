@@ -57,6 +57,7 @@ interface InspectorProps {
   onSidechatStop: () => void
   onSidechatNew: () => void
   onSidechatThread: (threadId: string) => void
+  onSidechatClose: (threadId: string) => void
   onSidechatModel: (provider: string, model: string) => void
   onSidechatEffort: (effort: string) => void
   onSidechatPermission: (permission: string) => void
@@ -103,6 +104,7 @@ export function Inspector({
   onSidechatStop,
   onSidechatNew,
   onSidechatThread,
+  onSidechatClose,
   onSidechatModel,
   onSidechatEffort,
   onSidechatPermission,
@@ -182,6 +184,7 @@ export function Inspector({
           onStop={onSidechatStop}
           onNewThread={onSidechatNew}
           onThread={onSidechatThread}
+          onCloseThread={onSidechatClose}
           onModel={onSidechatModel}
           onEffort={onSidechatEffort}
           onPermission={onSidechatPermission}

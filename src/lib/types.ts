@@ -296,6 +296,7 @@ export interface ReviewDocument {
 export interface SidechatThreadSummary {
   id: string
   title: string
+  materialized?: boolean
 }
 
 export interface QuestionOption {

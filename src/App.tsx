@@ -45,6 +45,7 @@ import {
 } from './lib/pending-turn.ts'
 import { permissionOverrideForNewSession } from './lib/session-permission.ts'
 import { deepSeekNetworkPolicy, isNetworkMode } from './lib/network-mode.ts'
+import { isPlaceholderSidechatTitle, reconcileSidechatThreads } from './lib/sidechat-state.ts'
 import { TrailingTask } from './lib/trailing-task.ts'
 import { platformBasename as basename, shortcutLabel } from './lib/platform.ts'
 import type {
@@ -219,9 +220,13 @@ function readSidechatThreads(): Record<string, SidechatThreadSummary[]> {
         if (typeof entry !== 'object' || entry === null) return []
         const record = entry as Record<string, unknown>
         if (typeof record['id'] !== 'string' || !/^[a-zA-Z0-9-]{1,96}$/.test(record['id']) || typeof record['title'] !== 'string') return []
-        return [{ id: record['id'], title: record['title'].trim().slice(0, 48) || 'Sidechat' }]
+        return [{
+          id: record['id'],
+          title: record['title'].trim().slice(0, 48) || 'Sidechat',
+          ...(record['materialized'] === true ? { materialized: true } : {}),
+        }]
       }).slice(0, 24)
-      if (threads.length > 0) result[parentId] = threads
+      result[parentId] = threads
     }
     return result
   } catch {
@@ -678,6 +683,26 @@ export function App() {
   const sidechatPermissionOptions = sidechatCodexActive
     ? CODEX_PERMISSION_OPTIONS
     : permissions?.options ?? HOST_PERMISSION_OPTIONS
+
+  useEffect(() => {
+    if (selectedId === undefined) return
+    const storedThreads = sidechatThreadsByParent[selectedId]
+    if (storedThreads === undefined) return
+    const reconciled = reconcileSidechatThreads(storedThreads, thread => {
+      const owner = sidechatOwnerId(selectedId, thread.id)
+      const hostSessionId = sidechatHostSessions[owner]
+        ?? (thread.id === DEFAULT_SIDECHAT_THREAD.id ? sidechatHostSessions[selectedId] : undefined)
+      return hostSessionId !== undefined || readCodexSession(owner).threadId !== undefined
+    })
+    if (reconciled.length === storedThreads.length) return
+    const retained = new Set(reconciled.map(thread => thread.id))
+    setSidechatThreadsByParent(current => ({ ...current, [selectedId]: reconciled }))
+    setActiveSidechatByParent(current => {
+      if (retained.has(current[selectedId] ?? '')) return current
+      const { [selectedId]: _removed, ...rest } = current
+      return reconciled[0] === undefined ? rest : { ...rest, [selectedId]: reconciled[0].id }
+    })
+  }, [selectedId, sidechatHostSessions, sidechatThreadsByParent])
 
   const refreshCodexCatalog = useCallback(async (force = false): Promise<void> => {
     try {
@@ -1628,13 +1653,18 @@ export function App() {
     setActiveSidechatByParent(current => ({ ...current, [selectedId]: threadId }))
   }
 
-  const nameActiveSidechat = (text: string): void => {
-    if (selectedId === undefined || activeSidechat === undefined || !/^Sidechat \d+$/.test(activeSidechat.title)) return
+  const materializeActiveSidechat = (text: string): void => {
+    if (selectedId === undefined || activeSidechat === undefined) return
     const title = text.replace(/\s+/g, ' ').trim().slice(0, 34)
-    if (title === '') return
     setSidechatThreadsByParent(current => ({
       ...current,
-      [selectedId]: (current[selectedId] ?? sidechatThreads).map(thread => thread.id === activeSidechat.id ? { ...thread, title } : thread),
+      [selectedId]: (current[selectedId] ?? sidechatThreads).map(thread => thread.id === activeSidechat.id
+        ? {
+            ...thread,
+            ...(title !== '' && isPlaceholderSidechatTitle(thread.title) ? { title } : {}),
+            materialized: true,
+          }
+        : thread),
     }))
   }
 
@@ -1697,7 +1727,6 @@ export function App() {
       blocks: [{ kind: 'text', text }],
     }
     setSidechatMessages(current => [...current, optimistic])
-    nameActiveSidechat(text)
     setSidechatRunning(true)
     setSidechatError(undefined)
     try {
@@ -1727,6 +1756,7 @@ export function App() {
           permission: sidechatSelection.permission as CodexPermissionMode,
         }
         writeCodexSession(sidechatOwner, next)
+        materializeActiveSidechat(text)
         setSidechatTurnId(result.turnId)
         return
       }
@@ -1756,6 +1786,7 @@ export function App() {
         { type: 'text', text },
       ]
       await harnessApi.prompt(hostSessionId, content)
+      materializeActiveSidechat(text)
       let observedAnswer = false
       for (let attempt = 0; attempt < 300 && generation === sidechatGeneration.current; attempt += 1) {
         await wait(attempt === 0 ? 180 : 620)
@@ -1795,6 +1826,44 @@ export function App() {
     } finally {
       setSidechatRunning(false)
       setSidechatTurnId(undefined)
+    }
+  }
+
+  const handleCloseSidechat = (threadId: string): void => {
+    if (selectedId === undefined) return
+    const closingIndex = sidechatThreads.findIndex(thread => thread.id === threadId)
+    if (closingIndex < 0) return
+    const closingOwner = sidechatOwnerId(selectedId, threadId)
+    const nextThreads = sidechatThreads.filter(thread => thread.id !== threadId)
+    const nextActiveId = nextThreads[Math.min(closingIndex, Math.max(0, nextThreads.length - 1))]?.id
+
+    if (threadId === activeSidechatId && sidechatRunning) {
+      if (sidechatCodexActive) {
+        const state = readCodexSession(closingOwner)
+        if (state.threadId !== undefined && sidechatTurnId !== undefined) {
+          void codexApi.interrupt(state.threadId, sidechatTurnId).catch(() => undefined)
+        }
+      } else {
+        const hostSessionId = sidechatHostSessions[closingOwner]
+          ?? (threadId === DEFAULT_SIDECHAT_THREAD.id ? sidechatHostSessions[selectedId] : undefined)
+        if (hostSessionId !== undefined) void harnessApi.cancel(hostSessionId).catch(() => undefined)
+      }
+    }
+
+    sidechatGeneration.current += 1
+    localStorage.removeItem(`${SIDECHAT_SELECTION_STORAGE_PREFIX}${closingOwner}`)
+    localStorage.removeItem(`dsh-workbench-sidechat-draft:${closingOwner}`)
+    setSidechatThreadsByParent(current => ({ ...current, [selectedId]: nextThreads }))
+    setActiveSidechatByParent(current => {
+      if (current[selectedId] !== threadId && activeSidechatId !== threadId) return current
+      const { [selectedId]: _removed, ...rest } = current
+      return nextActiveId === undefined ? rest : { ...rest, [selectedId]: nextActiveId }
+    })
+    if (threadId === activeSidechatId) {
+      setSidechatMessages([])
+      setSidechatRunning(false)
+      setSidechatTurnId(undefined)
+      setSidechatError(undefined)
     }
   }
 
@@ -2875,7 +2944,7 @@ export function App() {
           questions={pendingQuestions}
           sidechat={{
             owner: sidechatOwner,
-            parentTitle: titleOf(selected),
+            parentTitle: selected === undefined ? undefined : titleOf(selected),
             threads: sidechatThreads,
             activeThreadId: activeSidechatId,
             provider: sidechatCodexActive ? 'Codex' : sidechatModelEntry?.name ?? sidechatSelection?.model ?? 'DeepSeek',
@@ -2896,6 +2965,7 @@ export function App() {
           onSidechatStop={() => { void handleSidechatStop() }}
           onSidechatNew={handleNewSidechat}
           onSidechatThread={handleSelectSidechat}
+          onSidechatClose={handleCloseSidechat}
           onSidechatModel={handleSidechatModel}
           onSidechatEffort={handleSidechatEffort}
           onSidechatPermission={handleSidechatPermission}

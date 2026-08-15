@@ -2959,14 +2959,24 @@ a:focus-visible {
 
 .sidechat-thread-bar > div::-webkit-scrollbar { display: none; }
 
-.sidechat-thread-bar [role='tab'] {
+.sidechat-thread-tab {
+  position: relative;
   max-width: 112px;
   height: 27px;
-  padding: 0 8px;
+  display: flex;
+  align-items: center;
   flex: none;
-  overflow: hidden;
   border: 1px solid transparent;
   border-radius: 6px;
+  overflow: hidden;
+}
+
+.sidechat-thread-select {
+  min-width: 0;
+  height: 100%;
+  padding: 0 24px 0 8px;
+  overflow: hidden;
+  border: 0;
   color: var(--muted-2);
   background: transparent;
   font-size: 8.5px;
@@ -2974,15 +2984,41 @@ a:focus-visible {
   white-space: nowrap;
 }
 
-.sidechat-thread-bar [role='tab']:hover {
-  color: var(--ink-soft);
+.sidechat-thread-tab:hover {
   background: var(--surface-hover);
 }
 
-.sidechat-thread-bar [role='tab'][data-active='true'] {
-  color: var(--ink);
+.sidechat-thread-tab:hover .sidechat-thread-select {
+  color: var(--ink-soft);
+}
+
+.sidechat-thread-tab[data-active='true'] {
   border-color: var(--border);
   background: var(--surface-raised);
+}
+
+.sidechat-thread-tab[data-active='true'] .sidechat-thread-select { color: var(--ink); }
+
+.sidechat-thread-close {
+  position: absolute;
+  right: 3px;
+  width: 19px;
+  height: 19px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  color: var(--muted-2);
+  background: transparent;
+  opacity: 0;
+}
+
+.sidechat-thread-tab:hover .sidechat-thread-close,
+.sidechat-thread-tab[data-active='true'] .sidechat-thread-close { opacity: 1; }
+
+.sidechat-thread-close:hover {
+  color: var(--ink);
+  background: var(--surface-hover);
 }
 
 .sidechat-thread-bar > .icon-button {
@@ -3100,6 +3136,21 @@ a:focus-visible {
 
 .sidechat-empty strong { color: var(--ink-soft); font-size: 11px; }
 .sidechat-empty span { max-width: 210px; font-size: 8.5px; line-height: 1.5; }
+
+.sidechat-empty-closed button {
+  margin-top: 4px;
+  padding: 6px 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--ink-soft);
+  background: var(--surface-raised);
+  font-size: 8.5px;
+}
+
+.sidechat-empty-closed button:hover { border-color: var(--border-strong); color: var(--ink); }
 
 .sidechat-message {
   margin-bottom: 11px;
