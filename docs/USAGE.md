@@ -14,22 +14,25 @@ DeepSeek Harness.app / DeepSeek Harness.exe
                 └── Codex account, model catalog, approvals, and sandbox
 ```
 
-The upstream checkout and its browser UI remain available at `http://127.0.0.1:3080`. Closing or uninstalling the desktop app does not stop the Host or delete its `~/.dsh` data.
+The upstream checkout and its browser UI remain available at `http://127.0.0.1:3080`. Closing the app never deletes Host data. A Host that you started externally keeps running; a Host started and owned by the setup wizard is stopped when the desktop app fully quits.
 
 ## 1. Install and launch
 
 ### Downloaded application
 
-Use the [v0.1.2 release](https://github.com/Eentropie/deepseek-harness-macos-gui/releases/tag/v0.1.2):
+Use the [latest release](https://github.com/Eentropie/deepseek-harness-macos-gui/releases/latest):
 
-- **macOS Apple Silicon:** download `DeepSeek-Harness-0.1.2-mac-arm64.zip`, extract it, and open `DeepSeek Harness.app`. The package is unsigned; Control-click → **Open** may be required once.
-- **Windows x64:** download `DeepSeek-Harness-0.1.2-Windows-x64-unpacked.zip`, extract the complete `win-unpacked` directory, and run `win-unpacked\DeepSeek Harness.exe`. Do not copy only the `.exe`; Electron also needs its DLLs, `resources`, and `locales` files. Windows SmartScreen may show an unrecognized-publisher warning.
+- **macOS Apple Silicon:** download the `DeepSeek-Harness-0.2.0-arm64.dmg` or `.zip` build and open `DeepSeek Harness.app`. An unsigned package may require Control-click → **Open** once.
+- **Windows x64:** download and run `DeepSeek-Harness-0.2.0-Windows-x64.exe`. The NSIS installer can choose the install directory and create desktop/Start-menu shortcuts. An unsigned package may show a Windows SmartScreen warning.
 
-The current release is a portable/unpacked Windows build. A Windows x64 host is required to produce an NSIS installer with `pnpm dist:win`.
+On first launch, the setup wizard checks Node.js, finds an existing Harness checkout or npm installation, can start the Local Host, configures the write-only DeepSeek key, checks Codex CLI/login readiness, selects the first work folder, and runs a final environment check.
 
-### Start the Local Host
+### Automatic or manual Local Host startup
 
-Keep the Host running in a separate terminal. Replace the path with your own checkout:
+Prefer **First-run setup → Start Local Host**. Existing checkouts with dependencies are started through Corepack, an installed `dsh` is reused, and only otherwise does the wizard offer the npm package path. The original browser UI and source remain unchanged.
+
+For manual startup, keep the Host running in a separate terminal. Replace the path with your own checkout:
+
 
 ```sh
 cd /path/to/deepseek-harness

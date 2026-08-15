@@ -27,6 +27,17 @@ contextBridge.exposeInMainWorld('dshDesktop', {
   codexReadThread: (threadId: string) => ipcRenderer.invoke('dsh:codex-read-thread', threadId),
   codexInterrupt: (threadId: string, turnId: string) => ipcRenderer.invoke('dsh:codex-interrupt', threadId, turnId),
   codexRespondApproval: (requestId: string | number, approved: boolean) => ipcRenderer.invoke('dsh:codex-respond-approval', requestId, approved),
+  terminalRun: (input: unknown) => ipcRenderer.invoke('dsh:terminal-run', input),
+  terminalStop: (id: string) => ipcRenderer.invoke('dsh:terminal-stop', id),
+  terminalChangeDirectory: (cwd: string, target: string) => ipcRenderer.invoke('dsh:terminal-change-directory', cwd, target),
+  setupInspect: () => ipcRenderer.invoke('dsh:setup-inspect'),
+  setupStartHost: () => ipcRenderer.invoke('dsh:setup-start-host'),
+  setupStopHost: () => ipcRenderer.invoke('dsh:setup-stop-host'),
+  setupOpenExternal: (target: string) => ipcRenderer.invoke('dsh:setup-open-external', target),
+  setupOpenCodexLogin: () => ipcRenderer.invoke('dsh:setup-open-codex-login'),
+  reviewList: (input: unknown) => ipcRenderer.invoke('dsh:review-list', input),
+  reviewRead: (input: unknown) => ipcRenderer.invoke('dsh:review-read', input),
+  reviewWrite: (input: unknown) => ipcRenderer.invoke('dsh:review-write', input),
   connectionState: () => ipcRenderer.invoke('dsh:connection-state') as Promise<ConnectionState>,
   onDownlink: (listener: (frame: unknown) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, frame: unknown): void => listener(frame)
@@ -52,5 +63,15 @@ contextBridge.exposeInMainWorld('dshDesktop', {
     const handler = (_event: Electron.IpcRendererEvent, payload: unknown): void => listener(payload)
     ipcRenderer.on('dsh:codex-event', handler)
     return () => ipcRenderer.removeListener('dsh:codex-event', handler)
+  },
+  onTerminalEvent: (listener: (event: unknown) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: unknown): void => listener(payload)
+    ipcRenderer.on('dsh:terminal-event', handler)
+    return () => ipcRenderer.removeListener('dsh:terminal-event', handler)
+  },
+  onSetupEvent: (listener: (event: unknown) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: unknown): void => listener(payload)
+    ipcRenderer.on('dsh:setup-event', handler)
+    return () => ipcRenderer.removeListener('dsh:setup-event', handler)
   },
 })

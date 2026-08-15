@@ -8,7 +8,12 @@ import type {
   DownlinkFrame,
   PluginControlSnapshot,
   PluginToggleResult,
+  ReviewDocument,
+  ReviewSnapshot,
   SessionExportResult,
+  SetupEvent,
+  SetupSnapshot,
+  TerminalEvent,
 } from './lib/types.ts'
 
 type DesktopConnectionState = 'connecting' | 'connected' | 'reconnecting'
@@ -49,12 +54,25 @@ interface DeepSeekDesktopBridge {
   codexReadThread: (threadId: string) => Promise<CodexThreadSnapshot>
   codexInterrupt: (threadId: string, turnId: string) => Promise<void>
   codexRespondApproval: (requestId: string | number, approved: boolean) => Promise<void>
+  terminalRun: (input: { id: string; cwd: string; command: string }) => Promise<{ accepted: true }>
+  terminalStop: (id: string) => Promise<void>
+  terminalChangeDirectory: (cwd: string, target: string) => Promise<string>
+  setupInspect: () => Promise<SetupSnapshot>
+  setupStartHost: () => Promise<SetupSnapshot>
+  setupStopHost: () => Promise<void>
+  setupOpenExternal: (target: 'deepseek-key' | 'node' | 'codex-install') => Promise<void>
+  setupOpenCodexLogin: () => Promise<void>
+  reviewList: (input: { sessionId: string; cwd: string }) => Promise<ReviewSnapshot>
+  reviewRead: (input: { sessionId: string; cwd: string; path: string }) => Promise<ReviewDocument>
+  reviewWrite: (input: { sessionId: string; cwd: string; path: string; content: string; expectedHash: string }) => Promise<ReviewDocument>
   connectionState: () => Promise<DesktopConnectionState>
   onDownlink: (listener: (frame: DownlinkFrame) => void) => () => void
   onConnectionState: (listener: (state: DesktopConnectionState) => void) => () => void
   onOpenPlugins: (listener: () => void) => () => void
   onOpenSettings: (listener: () => void) => () => void
   onCodexEvent: (listener: (event: CodexEvent) => void) => () => void
+  onTerminalEvent: (listener: (event: TerminalEvent) => void) => () => void
+  onSetupEvent: (listener: (event: SetupEvent) => void) => () => void
 }
 
 declare global {

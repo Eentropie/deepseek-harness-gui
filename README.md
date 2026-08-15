@@ -7,7 +7,7 @@
 <p align="center"><strong>A native macOS and Windows workbench for DeepSeek Harness, Codex, and local coding workflows.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/Eentropie/deepseek-harness-macos-gui/releases/tag/v0.1.2">Download v0.1.2</a> ·
+  <a href="https://github.com/Eentropie/deepseek-harness-macos-gui/releases/latest">Download latest</a> ·
   <a href="./docs/USAGE.md">Usage guide</a> ·
   <a href="./docs/USAGE.zh-CN.md">中文使用说明</a>
 </p>
@@ -27,6 +27,8 @@ DeepSeek Harness is a standalone macOS and Windows desktop GUI for a local DeepS
 - DeepSeek plus account-scoped ChatGPT/Codex models through the local Codex CLI login
 - Native Harness Agent presets with Standard, Code, Minimal, and Creator modes
 - Session context and activity inspector
+- Shared Context, file Review/editor, multi-Sidechat, approval, and Subagent side panel
+- Center-column terminal with streamed output and `Command-J` / `Ctrl-J` toggle
 - Live plugin inventory with one-click enable/disable for safe entries
 - Full Settings center for startup, layout, appearance, model, permissions, plugins, Host status, shortcuts, and app information
 - System, light, and dark appearance modes with comfortable or compact density
@@ -47,10 +49,12 @@ The visual system uses only black, white, and neutral grays. On macOS, the deskt
 
 ## Quick start
 
-1. Download the [latest macOS or Windows release](https://github.com/Eentropie/deepseek-harness-macos-gui/releases/tag/v0.1.2).
-2. Start the existing Harness Host in one Terminal or PowerShell window.
-3. Launch the desktop app and confirm **Settings → Local Host** is connected.
-4. Press `Command-O` on macOS or `Ctrl+O` on Windows to add a work folder, then create a session.
+1. Download the [latest macOS DMG/ZIP or Windows installer](https://github.com/Eentropie/deepseek-harness-macos-gui/releases/latest).
+2. Launch the app. The first-run wizard checks Node.js, detects an existing Harness checkout or installed package, and can start the Local Host for you.
+3. Add the write-only DeepSeek API key, verify the locally installed/signed-in Codex CLI if desired, and choose a work folder.
+4. Select **Run environment check**. When every required item is ready, enter the workbench.
+
+The Host remains a separate local process at `127.0.0.1:3080`; the app starts it without modifying or embedding the upstream localhost interface. If automatic detection is unavailable, the wizard provides the exact install/login links and the manual commands below.
 
 The complete setup, DeepSeek API, Codex, external-provider, permissions, and troubleshooting walkthrough is in [the usage guide](./docs/USAGE.md). 中文用户可直接阅读[中文使用说明](./docs/USAGE.zh-CN.md)。
 
@@ -111,6 +115,17 @@ Archived sessions appear in the collapsed **Archived** group at the bottom of th
 
 For the exact Host parity boundary and recommended next features, see [HOST_CAPABILITY_AUDIT.md](./HOST_CAPABILITY_AUDIT.md).
 
+## Side panel, Review, Sidechat, and Terminal
+
+The right side panel shares one fixed area among four views:
+
+- **Context:** the complete runtime, token, session, task, goal, skills, and activity view.
+- **Review:** pending approvals plus changed-file discovery, Git diff reading, and guarded editing of existing text files inside the selected work folder. Saves use an expected-content hash so a file changed by another process is not overwritten.
+- **Sidechat:** side threads are owned by the selected main chat. Switching the main chat switches its Sidechat collection; one main chat can keep multiple Sidechats, each with its own draft, transcript, model, reasoning effort, and permission mode.
+- **Agents:** direct Subagent status and transcript navigation.
+
+The bottom Terminal opens only in the center conversation column. Toggle it with the top-right layout control or `Command-J` / `Ctrl-J`.
+
 ## Plugin manager
 
 Choose **Plugins**, select **Manage plugins** from `Command-K`, or press `Command-Shift-P`.
@@ -166,6 +181,7 @@ Stored credentials are never read into the renderer. The Host returns only wheth
 | `Command-O` | Add or switch work folder |
 | `Command-N` | New session |
 | `Command-B` | Collapse or expand sidebar |
+| `Command-J` | Toggle bottom Terminal panel |
 | `Command-Shift-I` | Hide or show inspector |
 | `Command-,` | Open Settings |
 | `Command-Shift-P` | Open plugin manager |
@@ -181,15 +197,17 @@ corepack pnpm install
 corepack pnpm check
 corepack pnpm test
 corepack pnpm pack:mac
+corepack pnpm dist:mac
 corepack pnpm pack:win
 corepack pnpm dist:win
 ```
 
 Outputs are:
 
-- macOS: `release/mac-arm64/DeepSeek Harness.app`
+- macOS unpacked: `release/mac-arm64/DeepSeek Harness.app`
+- macOS installer/archive: `release/DeepSeek-Harness-0.2.0-arm64.dmg` and `.zip`
 - Windows unpacked: `release/win-unpacked/DeepSeek Harness.exe`
-- Windows installer configuration: run `pnpm dist:win` on a Windows x64 build host to produce `release/DeepSeek-Harness-0.1.2-Windows-x64.exe`
+- Windows NSIS installer: `release/DeepSeek-Harness-0.2.0-Windows-x64.exe`
 
 These local builds are unsigned. macOS may require Control-click → **Open** once. Windows SmartScreen may show an unrecognized-publisher warning; verify the package source and checksum before choosing **Run anyway**. Production distribution should use Apple Developer ID and Authenticode signing respectively.
 

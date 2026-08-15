@@ -14,22 +14,24 @@ DeepSeek Harness.app / DeepSeek Harness.exe
                 └── Codex 账号、模型、审批与沙箱
 ```
 
-上游 Harness 仓库和原有浏览器界面仍然在 `http://127.0.0.1:3080`。关闭或卸载桌面 GUI 不会停止 Host，也不会删除 `~/.dsh` 数据。
+上游 Harness 仓库和原有浏览器界面仍然在 `http://127.0.0.1:3080`。关闭 GUI 不会删除 `~/.dsh` 数据；用户在外部启动的 Host 会继续运行，由首次向导启动并托管的 Host 会在桌面应用完全退出时停止。
 
 ## 1. 安装与启动
 
 ### 下载应用
 
-从 [`v0.1.2 Release`](https://github.com/Eentropie/deepseek-harness-macos-gui/releases/tag/v0.1.2) 下载：
+从[最新 Release](https://github.com/Eentropie/deepseek-harness-macos-gui/releases/latest)下载：
 
-- **macOS Apple Silicon：** 下载 `DeepSeek-Harness-0.1.2-mac-arm64.zip`，解压后打开 `DeepSeek Harness.app`。包未签名，首次可能需要右键/Control-click → **Open**。
-- **Windows x64：** 下载 `DeepSeek-Harness-0.1.2-Windows-x64-unpacked.zip`，完整解压 `win-unpacked\DeepSeek Harness.exe`。不要只复制 `.exe`，Electron 还需要 DLL、`resources` 和 `locales`。Windows SmartScreen 可能提示发布者未知。
+- **macOS Apple Silicon：** 下载 `DeepSeek-Harness-0.2.0-arm64.dmg` 或 `.zip`，打开 `DeepSeek Harness.app`。未签名包首次可能需要右键/Control-click → **Open**。
+- **Windows x64：** 下载并运行 `DeepSeek-Harness-0.2.0-Windows-x64.exe`。NSIS 安装器支持选择目录、桌面快捷方式和开始菜单项；未签名包可能触发 Windows SmartScreen。
 
-当前 Release 提供的是 Windows 免安装包。NSIS 安装器需要在 Windows x64 主机上运行 `pnpm dist:win` 生成。
+首次打开会出现配置向导：检查 Node.js、发现已有 Harness checkout 或 npm 安装、启动 Local Host、单向写入 DeepSeek API Key、检测 Codex CLI/登录、选择首个工作文件夹，并执行最终环境检查。
 
-### 启动 Local Host
+### 自动或手动启动 Local Host
 
-在另一个 Terminal 中保持 Host 运行：
+优先使用 **First-run setup → Start Local Host**。已有源码及依赖会通过 Corepack 直接启动；其次复用已安装的 `dsh`；只有都不存在时才使用 npm 包路径。原有 localhost 网页和 Host 源码不会被修改。
+
+如需手动启动，在另一个 Terminal 中保持 Host 运行：
 
 ```sh
 cd /path/to/deepseek-harness

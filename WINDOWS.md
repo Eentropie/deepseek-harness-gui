@@ -4,15 +4,17 @@
 
 完整的 DeepSeek API、Codex CLI、外部 Agent、权限和故障排查说明见[中文使用说明](./docs/USAGE.zh-CN.md)。
 
-## 使用当前免安装版
+## 使用安装版
 
-解压：
+下载并运行：
 
 ```text
-DeepSeek-Harness-0.1.2-Windows-x64-unpacked.zip
+DeepSeek-Harness-0.2.0-Windows-x64.exe
 ```
 
-然后运行：
+NSIS 安装器可选择安装目录，并创建桌面和开始菜单快捷方式。首次启动向导会依次检查 Node.js、Local Host、DeepSeek API Key、Codex CLI/登录和工作文件夹。
+
+如使用调试用 unpacked 目录，必须运行：
 
 ```text
 win-unpacked\DeepSeek Harness.exe
@@ -20,11 +22,14 @@ win-unpacked\DeepSeek Harness.exe
 
 不要只复制其中的 `.exe`；旁边的 DLL、resources 和 locales 都是 Electron 运行所需文件。
 
-项目同时保留 NSIS 安装版配置。当前安装器需要在 Windows x64 主机上执行 `pnpm dist:win` 生成；本次 macOS 26 交叉构建在旧版 x86_64 `makensis` 的卸载器阶段挂起，因此没有把未完成的安装器作为交付物。安装版成功生成后可选择安装目录、创建桌面/开始菜单快捷方式，并注册 `dsh-workbench://` 会话链接。
+GitHub Actions 会在 Windows x64 runner 上生成 NSIS 安装器，避免依赖 macOS 上的交叉编译器；安装版同时注册 `dsh-workbench://` 会话链接。
 
-## 1. 安装并启动 Local Host
+## 1. 自动或手动安装并启动 Local Host
 
-Windows 需要 Node.js 22 或更高版本、Git，以及 pnpm 11.7.0。打开 PowerShell：
+优先在首次启动向导点击 **Start Local Host**。它会复用已有 checkout、全局 `dsh` 或 npm 包，并在 `127.0.0.1:3080` 就绪后继续。原 localhost 端不会被修改。
+
+如需手动配置，Windows 需要 Node.js 22 或更高版本、Git，以及 pnpm 11.7.0。打开 PowerShell：
+
 
 ```powershell
 git clone https://github.com/deepseek-ai/deepseek-harness.git
@@ -53,7 +58,7 @@ Host 与桌面端的配置是分开的：关闭 GUI 不会停止 Host，卸载 G
 
 ```powershell
 codex --version
-codex --login
+codex login
 ```
 
 桌面应用会按以下顺序发现 Codex：
@@ -104,5 +109,5 @@ corepack pnpm dist:win
 
 ```text
 release\win-unpacked\DeepSeek Harness.exe
-release\DeepSeek-Harness-0.1.2-Windows-x64.exe  # Windows 主机上的 dist:win 产物
+release\DeepSeek-Harness-0.2.0-Windows-x64.exe
 ```

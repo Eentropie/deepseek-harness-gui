@@ -4,7 +4,7 @@
   "description": "Standalone macOS and Windows desktop client for a local DeepSeek Harness Host.",
   "author": "Local Harness",
   "private": false,
-  "version": "0.1.2",
+  "version": "0.2.0",
   "type": "module",
   "main": "dist-electron/main.cjs",
   "scripts": {
@@ -14,6 +14,7 @@
     "build": "tsc --noEmit && pnpm build:renderer && pnpm build:desktop",
     "desktop": "pnpm build && electron .",
     "pack:mac": "pnpm build && electron-builder --mac dir --arm64",
+    "dist:mac": "pnpm build && electron-builder --mac dmg zip --arm64",
     "pack:win": "pnpm build && electron-builder --win dir --x64",
     "dist:win": "pnpm build && electron-builder --win nsis --x64",
     "preview": "vite preview",
@@ -53,6 +54,7 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
+      "build/icon.png",
       "package.json"
     ],
     "protocols": [
@@ -63,8 +65,16 @@
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
-      "target": "dir",
-      "identity": null,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["arm64"]
+        }
+      ],
       "icon": "build/icon.png",
       "artifactName": "DeepSeek-Harness-${version}-${arch}.${ext}"
     },

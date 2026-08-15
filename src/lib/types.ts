@@ -246,6 +246,57 @@ export interface ApprovalRequest {
   codexRequestId?: string | number
 }
 
+export type TerminalEvent =
+  | { id: string; type: 'data'; stream: 'stdout' | 'stderr'; data: string }
+  | { id: string; type: 'exit'; code: number | null; signal: string | null }
+  | { id: string; type: 'error'; message: string }
+
+export interface SetupSnapshot {
+  platform: 'macOS' | 'Windows' | 'Linux'
+  host: {
+    online: boolean
+    managed: boolean
+    version?: string
+    candidate?: 'checkout' | 'installed' | 'npx'
+    candidateLabel?: string
+    error?: string
+  }
+  node: {
+    available: boolean
+    compatible: boolean
+    version?: string
+  }
+}
+
+export type SetupEvent =
+  | { type: 'host-log'; stream: 'stdout' | 'stderr'; data: string }
+  | { type: 'host-state'; running: boolean; message: string }
+
+export interface ReviewFileEntry {
+  path: string
+  indexStatus: string
+  worktreeStatus: string
+  untracked: boolean
+}
+
+export interface ReviewSnapshot {
+  git: boolean
+  files: ReviewFileEntry[]
+  error?: string
+}
+
+export interface ReviewDocument {
+  path: string
+  content: string
+  diff: string
+  hash: string
+}
+
+export interface SidechatThreadSummary {
+  id: string
+  title: string
+}
+
 export interface QuestionOption {
   label: string
   description?: string

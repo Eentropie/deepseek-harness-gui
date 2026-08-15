@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type 
 import { Composer } from './components/Composer.tsx'
 import { CommandPalette } from './components/CommandPalette.tsx'
 import { Conversation } from './components/Conversation.tsx'
+import { GoalDialog } from './components/GoalDialog.tsx'
 import { Icon } from './components/Icon.tsx'
 import { Inspector } from './components/Inspector.tsx'
-import { InteractionPanel, type QuestionAnswer } from './components/InteractionPanel.tsx'
+import type { QuestionAnswer } from './components/InteractionPanel.tsx'
 import { JobDock } from './components/JobDock.tsx'
+import { OnboardingWizard } from './components/OnboardingWizard.tsx'
 import { PluginManager } from './components/PluginManager.tsx'
 import {
   SettingsPanel,
@@ -14,6 +16,7 @@ import {
   type ThemeMode,
 } from './components/SettingsPanel.tsx'
 import { Sidebar } from './components/Sidebar.tsx'
+import { TerminalDock } from './components/TerminalDock.tsx'
 import { codexApi, harnessApi, subscribeCodex, subscribeDownlinks } from './lib/api.ts'
 import { applyCodexDeltas, type CodexDeltaEvent } from './lib/codex-stream.ts'
 import {
@@ -24,6 +27,7 @@ import {
   liveHistoryEntry,
   mergeHistoryTail,
   projectActivity,
+  projectConversation,
   projectQueue,
 } from './lib/history.ts'
 import { chooseGreeting } from './lib/greetings.ts'
@@ -62,6 +66,7 @@ import type {
   SessionSearchHit,
   SessionModels,
   SessionSummary,
+  SidechatThreadSummary,
   SkillEntry,
   SubagentCatalog,
   SubagentEntry,
@@ -87,6 +92,12 @@ const DEFAULT_HOST_PERMISSION = 'workspace-write'
 const STARTUP_SESSION_ID = new URLSearchParams(window.location.search).get('sessionId') ?? undefined
 const GREETING_STORAGE_KEY = 'dsh-workbench-last-greeting'
 const DRAFT_STORAGE_KEY = 'dsh-workbench-session-drafts'
+const SIDECHAT_HOST_STORAGE_KEY = 'dsh-workbench-sidechat-host-sessions'
+const SIDECHAT_SELECTION_STORAGE_PREFIX = 'dsh-workbench-sidechat-selection:'
+const SIDECHAT_THREADS_STORAGE_KEY = 'dsh-workbench-sidechat-threads-v1'
+const SIDECHAT_ACTIVE_STORAGE_KEY = 'dsh-workbench-sidechat-active-v1'
+const TERMINAL_OPEN_STORAGE_KEY = 'dsh-workbench-terminal-open'
+const ONBOARDING_STORAGE_KEY = 'dsh-workbench-onboarding-v1'
 const STARTUP_GREETING = (() => {
   const greeting = chooseGreeting(new Date(), localStorage.getItem(GREETING_STORAGE_KEY) ?? undefined)
   localStorage.setItem(GREETING_STORAGE_KEY, greeting)
@@ -109,6 +120,15 @@ interface PendingSession {
   cwd?: string
   agentPreset?: string
 }
+
+interface SidechatSelection {
+  provider: string
+  model: string
+  effort?: string
+  permission: string
+}
+
+const DEFAULT_SIDECHAT_THREAD: SidechatThreadSummary = { id: 'main', title: 'Sidechat 1' }
 
 const EMPTY_CODEX_SESSION: CodexSessionState = { active: false, permission: DEFAULT_CODEX_PERMISSION }
 
@@ -147,6 +167,54 @@ function writeCodexSession(sessionId: string, state: CodexSessionState): void {
   localStorage.setItem(codexSessionKey(sessionId), JSON.stringify(state))
 }
 
+function readSidechatSelection(sessionId: string): SidechatSelection | undefined {
+  try {
+    const value = JSON.parse(localStorage.getItem(`${SIDECHAT_SELECTION_STORAGE_PREFIX}${sessionId}`) ?? 'null') as unknown
+    if (typeof value !== 'object' || value === null) return undefined
+    const record = value as Record<string, unknown>
+    if (typeof record['provider'] !== 'string' || typeof record['model'] !== 'string' || typeof record['permission'] !== 'string') return undefined
+    return {
+      provider: record['provider'],
+      model: record['model'],
+      ...(typeof record['effort'] === 'string' ? { effort: record['effort'] } : {}),
+      permission: record['permission'],
+    }
+  } catch {
+    return undefined
+  }
+}
+
+function writeSidechatSelection(sessionId: string, value: SidechatSelection): void {
+  localStorage.setItem(`${SIDECHAT_SELECTION_STORAGE_PREFIX}${sessionId}`, JSON.stringify(value))
+}
+
+function readSidechatThreads(): Record<string, SidechatThreadSummary[]> {
+  try {
+    const value = JSON.parse(localStorage.getItem(SIDECHAT_THREADS_STORAGE_KEY) ?? '{}') as unknown
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+    const result: Record<string, SidechatThreadSummary[]> = {}
+    for (const [parentId, candidate] of Object.entries(value as Record<string, unknown>)) {
+      if (!Array.isArray(candidate)) continue
+      const threads = candidate.flatMap(entry => {
+        if (typeof entry !== 'object' || entry === null) return []
+        const record = entry as Record<string, unknown>
+        if (typeof record['id'] !== 'string' || !/^[a-zA-Z0-9-]{1,96}$/.test(record['id']) || typeof record['title'] !== 'string') return []
+        return [{ id: record['id'], title: record['title'].trim().slice(0, 48) || 'Sidechat' }]
+      }).slice(0, 24)
+      if (threads.length > 0) result[parentId] = threads
+    }
+    return result
+  } catch {
+    return {}
+  }
+}
+
+function sidechatOwnerId(parentSessionId: string, threadId: string): string {
+  return threadId === DEFAULT_SIDECHAT_THREAD.id
+    ? `sidechat:${parentSessionId}`
+    : `sidechat:${parentSessionId}:${threadId}`
+}
+
 function titleOf(session?: SessionSummary): string {
   const title = session?.projections?.values.title
   return typeof title === 'string' && title.trim() !== '' ? title : 'New session'
@@ -183,6 +251,21 @@ function storedDrafts(): Record<string, string> {
   } catch {
     return {}
   }
+}
+
+function storedStringMap(key: string): Record<string, string> {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) ?? '{}') as unknown
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+      .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1] !== ''))
+  } catch {
+    return {}
+  }
+}
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise(resolve => window.setTimeout(resolve, milliseconds))
 }
 
 function storedThemeMode(): ThemeMode {
@@ -247,9 +330,25 @@ export function App() {
   const [attachmentSources, setAttachmentSources] = useState<Record<string, string>>({})
   const [pendingApprovals, setPendingApprovals] = useState<ApprovalRequest[]>([])
   const [pendingQuestions, setPendingQuestions] = useState<QuestionRequest[]>([])
+  const [sidechatHostSessions, setSidechatHostSessions] = useState<Record<string, string>>(
+    () => storedStringMap(SIDECHAT_HOST_STORAGE_KEY),
+  )
+  const [sidechatThreadsByParent, setSidechatThreadsByParent] = useState<Record<string, SidechatThreadSummary[]>>(readSidechatThreads)
+  const [activeSidechatByParent, setActiveSidechatByParent] = useState<Record<string, string>>(
+    () => storedStringMap(SIDECHAT_ACTIVE_STORAGE_KEY),
+  )
+  const [sidechatMessages, setSidechatMessages] = useState<ConversationMessage[]>([])
+  const [sidechatRunning, setSidechatRunning] = useState(false)
+  const [sidechatTurnId, setSidechatTurnId] = useState<string>()
+  const [sidechatError, setSidechatError] = useState<string>()
+  const [sidechatSelection, setSidechatSelection] = useState<SidechatSelection>()
+  const [goalDialog, setGoalDialog] = useState<{ mode: 'create' | 'edit'; objective: string; rounds: number }>()
+  const [goalDialogBusy, setGoalDialogBusy] = useState(false)
+  const [goalDialogError, setGoalDialogError] = useState<string>()
   const [appError, setAppError] = useState<string>()
   const [actionError, setActionError] = useState<string>()
   const [pluginsOpen, setPluginsOpen] = useState(false)
+  const [onboardingOpen, setOnboardingOpen] = useState(() => !storedBoolean(ONBOARDING_STORAGE_KEY, false))
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [commandsOpen, setCommandsOpen] = useState(false)
   const [plugins, setPlugins] = useState<PluginControlSnapshot>()
@@ -259,6 +358,7 @@ export function App() {
   const [pluginBackup, setPluginBackup] = useState<string>()
   const [sidebarExpanded, setSidebarExpanded] = useState(() => storedBoolean('dsh-workbench-sidebar', true))
   const [inspectorOpen, setInspectorOpen] = useState(() => storedBoolean('dsh-workbench-inspector', true))
+  const [terminalOpen, setTerminalOpen] = useState(() => storedBoolean(TERMINAL_OPEN_STORAGE_KEY, false))
   const [themeMode, setThemeMode] = useState<ThemeMode>(storedThemeMode)
   const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
   const [density, setDensity] = useState<InterfaceDensity>(() => localStorage.getItem('dsh-workbench-density') === 'compact' ? 'compact' : 'comfortable')
@@ -275,6 +375,9 @@ export function App() {
   const conversationProjector = useRef<{ owner: string; projector: ConversationProjector }>()
   const codexDeltaQueue = useRef<CodexDeltaEvent[]>([])
   const codexDeltaTimer = useRef<number>()
+  const sidechatOwnerRef = useRef<string>()
+  const sidechatCodexActiveRef = useRef(false)
+  const sidechatGeneration = useRef(0)
   const providerTranscriptCache = useRef<Record<string, {
     deepSeek: ConversationMessage[]
     codex: ConversationMessage[]
@@ -300,6 +403,21 @@ export function App() {
   const selectedWorkspace = useMemo(
     () => workspaces.find(workspace => selectedId !== undefined && workspace.sessionIds.includes(selectedId)),
     [selectedId, workspaces],
+  )
+  const hiddenSidechatSessionIds = useMemo(
+    () => new Set(Object.values(sidechatHostSessions)),
+    [sidechatHostSessions],
+  )
+  const visibleSessions = useMemo(
+    () => sessions.filter(session => !hiddenSidechatSessionIds.has(session.sessionId)),
+    [hiddenSidechatSessionIds, sessions],
+  )
+  const visibleWorkspaces = useMemo(
+    () => workspaces.map(workspace => ({
+      ...workspace,
+      sessionIds: workspace.sessionIds.filter(sessionId => !hiddenSidechatSessionIds.has(sessionId)),
+    })),
+    [hiddenSidechatSessionIds, workspaces],
   )
   const pendingWorkspace = useMemo(
     () => workspaces.find(workspace => workspace.workspaceId === pendingSession?.workspaceId),
@@ -431,6 +549,40 @@ export function App() {
   const presentedPermission = codexActive
     ? codexPermission
     : permissions?.currentValue ?? (pendingSession === undefined ? undefined : pendingHostPermission)
+  const sidechatThreads = useMemo(
+    () => selectedId === undefined ? [] : sidechatThreadsByParent[selectedId] ?? [DEFAULT_SIDECHAT_THREAD],
+    [selectedId, sidechatThreadsByParent],
+  )
+  const activeSidechatId = selectedId === undefined
+    ? undefined
+    : sidechatThreads.some(thread => thread.id === activeSidechatByParent[selectedId])
+      ? activeSidechatByParent[selectedId]
+      : sidechatThreads[0]?.id
+  const activeSidechat = sidechatThreads.find(thread => thread.id === activeSidechatId)
+  const sidechatOwner = selectedId === undefined || activeSidechatId === undefined
+    ? undefined
+    : sidechatOwnerId(selectedId, activeSidechatId)
+  const sidechatHostSessionId = sidechatOwner === undefined
+    ? undefined
+    : sidechatHostSessions[sidechatOwner]
+      ?? (activeSidechatId === DEFAULT_SIDECHAT_THREAD.id && selectedId !== undefined ? sidechatHostSessions[selectedId] : undefined)
+  const sidechatCodexActive = sidechatSelection?.provider === CODEX_PROVIDER
+  const sidechatModelEntry = sidechatSelection === undefined
+    ? undefined
+    : presentedModels?.groups.find(group => group.id === sidechatSelection.provider)?.models.find(model => model.id === sidechatSelection.model)
+  const sidechatModels = presentedModels === undefined || sidechatSelection === undefined
+    ? undefined
+    : {
+        ...presentedModels,
+        current: {
+          provider: sidechatSelection.provider,
+          model: sidechatSelection.model,
+          ...(sidechatSelection.effort === undefined ? {} : { reasoningEffort: sidechatSelection.effort }),
+        },
+      }
+  const sidechatPermissionOptions = sidechatCodexActive
+    ? CODEX_PERMISSION_OPTIONS
+    : permissions?.options ?? HOST_PERMISSION_OPTIONS
 
   const refreshCodexCatalog = useCallback(async (force = false): Promise<void> => {
     try {
@@ -461,6 +613,73 @@ export function App() {
   useEffect(() => {
     localStorage.setItem('dsh-workbench-deleted-sessions', JSON.stringify([...deletedSessionIds]))
   }, [deletedSessionIds])
+
+  useEffect(() => {
+    localStorage.setItem(SIDECHAT_HOST_STORAGE_KEY, JSON.stringify(sidechatHostSessions))
+  }, [sidechatHostSessions])
+
+  useEffect(() => {
+    localStorage.setItem(SIDECHAT_THREADS_STORAGE_KEY, JSON.stringify(sidechatThreadsByParent))
+  }, [sidechatThreadsByParent])
+
+  useEffect(() => {
+    localStorage.setItem(SIDECHAT_ACTIVE_STORAGE_KEY, JSON.stringify(activeSidechatByParent))
+  }, [activeSidechatByParent])
+
+  useEffect(() => {
+    localStorage.setItem(TERMINAL_OPEN_STORAGE_KEY, String(terminalOpen))
+  }, [terminalOpen])
+
+  useEffect(() => {
+    if (sidechatOwner === undefined || presentedModels === undefined) {
+      setSidechatSelection(undefined)
+      return
+    }
+    const legacyStored = activeSidechatId === DEFAULT_SIDECHAT_THREAD.id && selectedId !== undefined
+      ? readSidechatSelection(selectedId)
+      : undefined
+    const stored = legacyStored ?? readSidechatSelection(sidechatOwner)
+    if (legacyStored !== undefined && selectedId !== undefined) {
+      localStorage.removeItem(`${SIDECHAT_SELECTION_STORAGE_PREFIX}${selectedId}`)
+    }
+    const storedModel = stored === undefined
+      ? undefined
+      : presentedModels.groups.find(group => group.id === stored.provider)?.models.find(model => model.id === stored.model)
+    if (stored !== undefined && storedModel !== undefined) {
+      const efforts = storedModel.reasoning?.efforts ?? []
+      const effort = stored.effort !== undefined && efforts.some(item => item.id === stored.effort)
+        ? stored.effort
+        : storedModel.reasoning?.defaultEffort
+      const permissionOptions = stored.provider === CODEX_PROVIDER
+        ? CODEX_PERMISSION_OPTIONS
+        : permissions?.options ?? HOST_PERMISSION_OPTIONS
+      const permission = permissionOptions.some(option => option.value === stored.permission)
+        ? stored.permission
+        : stored.provider === CODEX_PROVIDER ? DEFAULT_CODEX_PERMISSION : presentedPermission ?? DEFAULT_HOST_PERMISSION
+      const next: SidechatSelection = {
+        provider: stored.provider,
+        model: stored.model,
+        ...(effort === undefined ? {} : { effort }),
+        permission,
+      }
+      writeSidechatSelection(sidechatOwner, next)
+      setSidechatSelection(next)
+      return
+    }
+    const current = presentedModels.current
+    const next: SidechatSelection = {
+      provider: current.provider,
+      model: current.model,
+      ...(current.reasoningEffort === undefined ? {} : { effort: current.reasoningEffort }),
+      permission: current.provider === CODEX_PROVIDER ? codexPermission : presentedPermission ?? DEFAULT_HOST_PERMISSION,
+    }
+    writeSidechatSelection(sidechatOwner, next)
+    setSidechatSelection(next)
+  }, [activeSidechatId, codexPermission, permissions?.options, presentedModels, presentedPermission, selectedId, sidechatOwner])
+
+  useEffect(() => {
+    if (pendingApprovals.length + pendingQuestions.length > 0) setInspectorOpen(true)
+  }, [pendingApprovals.length, pendingQuestions.length])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -528,6 +747,37 @@ export function App() {
     return () => { active = false }
   }, [pendingSession?.key, selectedId])
 
+  useEffect(() => {
+    const generation = ++sidechatGeneration.current
+    sidechatOwnerRef.current = sidechatOwner
+    sidechatCodexActiveRef.current = sidechatCodexActive
+    setSidechatMessages([])
+    setSidechatRunning(false)
+    setSidechatTurnId(undefined)
+    setSidechatError(undefined)
+    if (sidechatOwner === undefined) return
+    let active = true
+    if (sidechatCodexActive) {
+      const state = readCodexSession(sidechatOwner)
+      if (state.threadId === undefined) return () => { active = false }
+      void codexApi.readThread(state.threadId).then(snapshot => {
+        if (active && generation === sidechatGeneration.current) setSidechatMessages(snapshot.messages)
+      }).catch(reason => {
+        if (active && generation === sidechatGeneration.current) setSidechatError(errorText(reason))
+      })
+      return () => { active = false }
+    }
+    if (sidechatHostSessionId === undefined) return () => { active = false }
+    void Promise.all([harnessApi.history(sidechatHostSessionId), harnessApi.sessions()]).then(([page, list]) => {
+      if (!active || generation !== sidechatGeneration.current) return
+      setSidechatMessages(projectConversation(page.events))
+      setSidechatRunning(list.items.find(item => item.sessionId === sidechatHostSessionId)?.running === true)
+    }).catch(reason => {
+      if (active && generation === sidechatGeneration.current) setSidechatError(errorText(reason))
+    })
+    return () => { active = false }
+  }, [sidechatCodexActive, sidechatHostSessionId, sidechatOwner])
+
   useEffect(() => subscribeCodex((event: CodexEvent) => {
     if (event.type === 'usage-updated') return
     if (event.type === 'approval-requested') {
@@ -551,6 +801,37 @@ export function App() {
       return
     }
     const sessionId = event.sessionId
+    if (sessionId?.startsWith('sidechat:') === true) {
+      if (!sidechatCodexActiveRef.current || sessionId !== sidechatOwnerRef.current) return
+      if (event.type === 'turn-started') {
+        setSidechatRunning(true)
+        setSidechatTurnId(event.turnId)
+        return
+      }
+      if (event.type === 'assistant-delta' || event.type === 'reasoning-delta') {
+        setSidechatMessages(current => applyCodexDeltas(current, [event]))
+        return
+      }
+      if (event.type === 'turn-completed') {
+        setSidechatTurnId(undefined)
+        if (event.status === 'failed') setSidechatError(event.error ?? 'Codex sidechat failed')
+        void codexApi.readThread(event.threadId).then(snapshot => {
+          if (event.sessionId === sidechatOwnerRef.current && sidechatCodexActiveRef.current) {
+            setSidechatMessages(snapshot.messages)
+          }
+        }).catch(reason => setSidechatError(errorText(reason)))
+          .finally(() => {
+            if (event.sessionId === sidechatOwnerRef.current) setSidechatRunning(false)
+          })
+        return
+      }
+      if (event.type === 'error') {
+        setSidechatRunning(false)
+        setSidechatTurnId(undefined)
+        setSidechatError(event.message)
+      }
+      return
+    }
     if (sessionId !== undefined && sessionId !== selectedRef.current) return
     if (event.type === 'turn-started') {
       setCodexRunning(true)
@@ -665,14 +946,17 @@ export function App() {
       setAppError(undefined)
       setSelectedId(current => {
         if (current !== undefined && sessionPage.items.some(session => session.sessionId === current)
-          && !deletedSessionIds.has(current)) return current
+          && !deletedSessionIds.has(current) && !hiddenSidechatSessionIds.has(current)) return current
         if (pendingSession !== undefined) return undefined
         const saved = resumeLastSession ? localStorage.getItem('dsh-workbench-session') : null
         if (saved !== null && !deletedSessionIds.has(saved)
+          && !hiddenSidechatSessionIds.has(saved)
           && sessionPage.items.some(session => session.sessionId === saved)) return saved
         return sessionPage.items.find(session => !deletedSessionIds.has(session.sessionId)
+            && !hiddenSidechatSessionIds.has(session.sessionId)
             && !workspacePage.archivedSessionIds.includes(session.sessionId) && !session.blank)?.sessionId
           ?? sessionPage.items.find(session => !deletedSessionIds.has(session.sessionId)
+            && !hiddenSidechatSessionIds.has(session.sessionId)
             && !workspacePage.archivedSessionIds.includes(session.sessionId))?.sessionId
       })
     } catch (reason) {
@@ -682,7 +966,7 @@ export function App() {
     } finally {
       if (signal?.aborted !== true) setChromeLoading(false)
     }
-  }, [deletedSessionIds, pendingSession, resumeLastSession])
+  }, [deletedSessionIds, hiddenSidechatSessionIds, pendingSession, resumeLastSession])
 
   const refreshChrome = useCallback((signal?: AbortSignal): Promise<void> => {
     if (signal !== undefined) return refreshChromeNow(signal)
@@ -1093,6 +1377,181 @@ export function App() {
       setActionError(`问题响应失败：${errorText(reason)}`)
     }
   }, [])
+
+  const handleNewSidechat = (): void => {
+    if (selectedId === undefined || sidechatThreads.length >= 24) return
+    const id = `chat-${crypto.randomUUID()}`
+    const nextThread: SidechatThreadSummary = { id, title: `Sidechat ${sidechatThreads.length + 1}` }
+    setSidechatThreadsByParent(current => ({
+      ...current,
+      [selectedId]: [...sidechatThreads, nextThread],
+    }))
+    setActiveSidechatByParent(current => ({ ...current, [selectedId]: id }))
+  }
+
+  const handleSelectSidechat = (threadId: string): void => {
+    if (selectedId === undefined || !sidechatThreads.some(thread => thread.id === threadId)) return
+    setActiveSidechatByParent(current => ({ ...current, [selectedId]: threadId }))
+  }
+
+  const nameActiveSidechat = (text: string): void => {
+    if (selectedId === undefined || activeSidechat === undefined || !/^Sidechat \d+$/.test(activeSidechat.title)) return
+    const title = text.replace(/\s+/g, ' ').trim().slice(0, 34)
+    if (title === '') return
+    setSidechatThreadsByParent(current => ({
+      ...current,
+      [selectedId]: (current[selectedId] ?? sidechatThreads).map(thread => thread.id === activeSidechat.id ? { ...thread, title } : thread),
+    }))
+  }
+
+  const handleSidechatModel = (provider: string, model: string): void => {
+    if (sidechatOwner === undefined || presentedModels === undefined) return
+    const entry = presentedModels.groups.find(group => group.id === provider)?.models.find(item => item.id === model)
+    if (entry === undefined) return
+    const previousEffort = sidechatSelection?.provider === provider ? sidechatSelection.effort : undefined
+    const efforts = entry.reasoning?.efforts ?? []
+    const effort = previousEffort !== undefined && efforts.some(item => item.id === previousEffort)
+      ? previousEffort
+      : entry.reasoning?.defaultEffort
+    const previousPermission = sidechatSelection?.provider === provider ? sidechatSelection.permission : undefined
+    const next: SidechatSelection = {
+      provider,
+      model,
+      ...(effort === undefined ? {} : { effort }),
+      permission: previousPermission
+        ?? (provider === CODEX_PROVIDER ? DEFAULT_CODEX_PERMISSION : presentedPermission ?? DEFAULT_HOST_PERMISSION),
+    }
+    writeSidechatSelection(sidechatOwner, next)
+    setSidechatSelection(next)
+  }
+
+  const handleSidechatEffort = (effort: string): void => {
+    if (sidechatOwner === undefined || sidechatSelection === undefined) return
+    if (sidechatModelEntry?.reasoning?.efforts.some(item => item.id === effort) !== true) return
+    const next = { ...sidechatSelection, effort }
+    writeSidechatSelection(sidechatOwner, next)
+    setSidechatSelection(next)
+  }
+
+  const handleSidechatPermission = (permission: string): void => {
+    if (sidechatOwner === undefined || sidechatSelection === undefined) return
+    if (!sidechatPermissionOptions.some(option => option.value === permission)) return
+    if ((permission === 'full-access' || permission === 'danger-full-access')
+      && !window.confirm('Full access removes approval or workspace sandbox restrictions for future sidechat turns. Continue?')) return
+    const next = { ...sidechatSelection, permission }
+    writeSidechatSelection(sidechatOwner, next)
+    setSidechatSelection(next)
+  }
+
+  const handleSidechatSend = async (text: string): Promise<void> => {
+    if (selectedId === undefined || sidechatOwner === undefined || sidechatRunning || sidechatSelection === undefined) return
+    const generation = ++sidechatGeneration.current
+    const optimistic: ConversationMessage = {
+      id: `sidechat-user-${Date.now()}`,
+      seq: (sidechatMessages.at(-1)?.seq ?? 0) + 1,
+      time: Date.now(),
+      role: 'user',
+      blocks: [{ kind: 'text', text }],
+    }
+    setSidechatMessages(current => [...current, optimistic])
+    nameActiveSidechat(text)
+    setSidechatRunning(true)
+    setSidechatError(undefined)
+    try {
+      const cwd = activeWorkspace?.path ?? selected?.cwd ?? host?.cwd
+      if (cwd === undefined) throw new Error('This session has no working directory')
+      const handoff = collectProviderHandoff(activeMessages)
+      if (sidechatCodexActive) {
+        if (sidechatSelection.provider !== CODEX_PROVIDER || sidechatSelection.effort === undefined) throw new Error('Codex model metadata is unavailable')
+        const state = readCodexSession(sidechatOwner)
+        const result = await codexApi.prompt({
+          sessionId: sidechatOwner,
+          ...(state.threadId === undefined ? {} : { threadId: state.threadId }),
+          cwd,
+          model: sidechatSelection.model,
+          effort: sidechatSelection.effort,
+          permission: sidechatSelection.permission,
+          prompt: text,
+          ...(state.threadId === undefined ? { context: handoff.messages } : {}),
+        })
+        const next: CodexSessionState = {
+          ...state,
+          active: true,
+          threadId: result.threadId,
+          model: sidechatSelection.model,
+          effort: sidechatSelection.effort,
+          permission: sidechatSelection.permission as CodexPermissionMode,
+        }
+        writeCodexSession(sidechatOwner, next)
+        setSidechatTurnId(result.turnId)
+        return
+      }
+
+      let hostSessionId = sidechatHostSessionId
+      let created = false
+      if (hostSessionId === undefined) {
+        const result = await harnessApi.createSession({
+          ...(selectedWorkspace === undefined ? { cwd } : { workspaceId: selectedWorkspace.workspaceId }),
+          ...(selected?.agentPreset === undefined ? {} : { agentPreset: selected.agentPreset }),
+        })
+        hostSessionId = result.sessionId
+        created = true
+        const next = { ...sidechatHostSessions, [sidechatOwner]: hostSessionId }
+        localStorage.setItem(SIDECHAT_HOST_STORAGE_KEY, JSON.stringify(next))
+        setSidechatHostSessions(next)
+        await harnessApi.renameSession(hostSessionId, `${text.replace(/\s+/g, ' ').trim().slice(0, 34) || activeSidechat?.title || 'Sidechat'} · ${titleOf(selected)}`).catch(() => undefined)
+      }
+      await harnessApi.selectModel(hostSessionId, sidechatSelection.provider, sidechatSelection.model, sidechatSelection.effort)
+      if (sidechatSelection.permission !== DEFAULT_HOST_PERMISSION) await harnessApi.setPermission(hostSessionId, sidechatSelection.permission)
+      const baselineAssistantCount = sidechatMessages.filter(message => message.role === 'assistant').length
+      const content: PromptContentPart[] = [
+        ...(created && handoff.messages.length > 0
+          ? [{ type: 'text' as const, text: providerHandoffText(codexActive ? 'Codex' : 'DeepSeek', handoff) }]
+          : []),
+        { type: 'text', text },
+      ]
+      await harnessApi.prompt(hostSessionId, content)
+      let observedAnswer = false
+      for (let attempt = 0; attempt < 300 && generation === sidechatGeneration.current; attempt += 1) {
+        await wait(attempt === 0 ? 180 : 620)
+        const [page, list] = await Promise.all([harnessApi.history(hostSessionId), harnessApi.sessions()])
+        if (generation !== sidechatGeneration.current) return
+        const projected = projectConversation(page.events)
+        observedAnswer ||= projected.filter(message => message.role === 'assistant').length > baselineAssistantCount
+        const running = list.items.find(item => item.sessionId === hostSessionId)?.running === true
+        setSidechatMessages(projected)
+        setSidechatRunning(running || !observedAnswer)
+        if (observedAnswer && !running) break
+      }
+      if (generation === sidechatGeneration.current) setSidechatRunning(false)
+    } catch (reason) {
+      if (generation !== sidechatGeneration.current) return
+      setSidechatRunning(false)
+      setSidechatTurnId(undefined)
+      setSidechatError(errorText(reason))
+    }
+  }
+
+  const handleSidechatStop = async (): Promise<void> => {
+    if (sidechatOwner === undefined || !sidechatRunning) return
+    try {
+      if (sidechatCodexActive) {
+        const state = readCodexSession(sidechatOwner)
+        if (state.threadId !== undefined && sidechatTurnId !== undefined) {
+          await codexApi.interrupt(state.threadId, sidechatTurnId)
+        }
+      } else if (sidechatHostSessionId !== undefined) {
+        await harnessApi.cancel(sidechatHostSessionId)
+        const page = await harnessApi.history(sidechatHostSessionId)
+        setSidechatMessages(projectConversation(page.events))
+      }
+    } catch (reason) {
+      setSidechatError(errorText(reason))
+    } finally {
+      setSidechatRunning(false)
+      setSidechatTurnId(undefined)
+    }
+  }
 
   const handleCreatorPresetDraft = async (): Promise<void> => {
     if (busy) return
@@ -1764,21 +2223,21 @@ export function App() {
     if (selectedId === undefined || busy || subagentView !== undefined) return
     const goal = projectionValues?.goal
     const current = goal?.goal
+    if (action === 'create') {
+      setGoalDialogError(undefined)
+      setGoalDialog({ mode: 'create', objective: '', rounds: 8 })
+      return
+    }
+    if (action === 'edit') {
+      if (current === undefined) return
+      setGoalDialogError(undefined)
+      setGoalDialog({ mode: 'edit', objective: current.objective, rounds: current.maxGoalRounds })
+      return
+    }
+    if (current === undefined || goal === undefined) return
     try {
       setBusy(true)
-      if (action === 'create') {
-        const objective = window.prompt('Goal objective')?.trim()
-        if (objective === undefined || objective === '') return
-        const roundsText = window.prompt('Maximum rounds (optional)', String(current?.maxGoalRounds ?? 8))?.trim()
-        const rounds = roundsText === undefined || roundsText === '' ? undefined : Number(roundsText)
-        await harnessApi.goalCreate(selectedId, objective, rounds !== undefined && Number.isInteger(rounds) && rounds > 0 ? rounds : undefined)
-      } else if (current === undefined || goal === undefined) {
-        return
-      } else if (action === 'edit') {
-        const objective = window.prompt('Goal objective', current.objective)?.trim()
-        if (objective === undefined || objective === '') return
-        await harnessApi.goalEdit(selectedId, { id: current.id, revision: current.revision }, objective)
-      } else if (action === 'pause') {
+      if (action === 'pause') {
         await harnessApi.goalPause(selectedId, { id: current.id, revision: current.revision })
       } else if (action === 'resume') {
         await harnessApi.goalResume(selectedId, { id: current.id, revision: current.revision })
@@ -1794,6 +2253,27 @@ export function App() {
       setActionError(`目标操作失败：${errorText(reason)}`)
     } finally {
       setBusy(false)
+    }
+  }
+
+  const handleGoalSubmit = async (objective: string, maxGoalRounds: number): Promise<void> => {
+    if (selectedId === undefined || goalDialog === undefined || goalDialogBusy) return
+    setGoalDialogBusy(true)
+    setGoalDialogError(undefined)
+    try {
+      if (goalDialog.mode === 'create') {
+        await harnessApi.goalCreate(selectedId, objective, maxGoalRounds)
+      } else {
+        const current = projectionValues?.goal?.goal
+        if (current === undefined) throw new Error('The current goal is no longer available')
+        await harnessApi.goalEdit(selectedId, { id: current.id, revision: current.revision }, objective, maxGoalRounds)
+      }
+      setGoalDialog(undefined)
+      await refreshSession(selectedId)
+    } catch (reason) {
+      setGoalDialogError(errorText(reason))
+    } finally {
+      setGoalDialogBusy(false)
     }
   }
 
@@ -1859,6 +2339,9 @@ export function App() {
       } else if (key === 'b') {
         event.preventDefault()
         setSidebarExpanded(value => !value)
+      } else if (key === 'j') {
+        event.preventDefault()
+        setTerminalOpen(value => !value)
       } else if (key === 'i' && event.shiftKey) {
         event.preventDefault()
         setInspectorOpen(value => !value)
@@ -1886,8 +2369,8 @@ export function App() {
   return (
     <div className="workbench" data-sidebar={sidebarExpanded ? 'expanded' : 'rail'} data-inspector={inspectorOpen}>
       <Sidebar
-        sessions={sessions}
-        workspaces={workspaces}
+        sessions={visibleSessions}
+        workspaces={visibleWorkspaces}
         selectedId={selectedId}
         archivedSessionIds={archivedSessionIds}
         pinnedSessionIds={pinnedSessionIds}
@@ -1949,11 +2432,12 @@ export function App() {
             <button type="button" className="icon-button" onClick={() => { void refreshChrome(); void refreshCodexCatalog(true) }} aria-label="Refresh">
               <Icon name="refresh" size={15} />
             </button>
-            {!inspectorOpen && (
-              <button type="button" className="icon-button" onClick={() => setInspectorOpen(true)} aria-label="Open inspector">
-                <Icon name="panel-right" size={15} />
-              </button>
-            )}
+            <button type="button" className="icon-button" data-active={terminalOpen} onClick={() => setTerminalOpen(value => !value)} aria-label="Toggle bottom panel" title={`Toggle bottom panel (${shortcutLabel('J')})`}>
+              <Icon name="terminal" size={15} />
+            </button>
+            <button type="button" className="icon-button" data-active={inspectorOpen} onClick={() => setInspectorOpen(value => !value)} aria-label="Toggle side panel" title={`Toggle side panel (${shortcutLabel('I', true)})`}>
+              <Icon name="panel-right" size={15} />
+            </button>
           </div>
         </header>
 
@@ -1961,16 +2445,10 @@ export function App() {
           <div className="host-error">
             <div><strong>Harness Host is unavailable</strong><span>{appError}</span></div>
             <code>cd /path/to/deepseek-harness &amp;&amp; corepack pnpm dsh web</code>
+            <button type="button" onClick={() => setOnboardingOpen(true)}>Setup</button>
             <button type="button" onClick={() => void refreshChrome()}>Retry</button>
           </div>
         )}
-
-        <InteractionPanel
-          approval={pendingApprovals[0]}
-          question={pendingQuestions[0]}
-          onApproval={(request, outcome) => { void handleApproval(request, outcome) }}
-          onQuestion={(request, answers) => { void handleQuestion(request, answers) }}
-        />
 
         <Conversation
           messages={activeMessages}
@@ -2009,6 +2487,13 @@ export function App() {
           queue={activeQueue}
           onQueueAction={(itemId, action) => { void handleQueueAction(itemId, action) }}
         />
+
+        {terminalOpen && (
+          <TerminalDock
+            cwd={activeWorkspace?.path ?? pendingSession?.cwd ?? selected?.cwd ?? host?.cwd}
+            onClose={() => setTerminalOpen(false)}
+          />
+        )}
       </main>
 
       {inspectorOpen && (
@@ -2021,9 +2506,33 @@ export function App() {
           skills={skills}
           subagents={subagents}
           subagentView={subagentView === undefined ? undefined : { id: subagentView.childSessionId, label: subagentView.label }}
+          approvals={pendingApprovals}
+          questions={pendingQuestions}
+          sidechat={{
+            owner: sidechatOwner,
+            parentTitle: titleOf(selected),
+            threads: sidechatThreads,
+            activeThreadId: activeSidechatId,
+            provider: sidechatCodexActive ? 'Codex' : sidechatModelEntry?.name ?? sidechatSelection?.model ?? 'DeepSeek',
+            models: sidechatModels,
+            permissionOptions: sidechatPermissionOptions,
+            permission: sidechatSelection?.permission,
+            messages: sidechatMessages,
+            running: sidechatRunning,
+            error: sidechatError,
+          }}
           onUseSkill={name => setDraft(current => `${current}${current === '' ? '' : ' '}/${name} `)}
           onOpenSubagent={handleOpenSubagent}
           onExitSubagent={() => { setSubagentView(undefined) }}
+          onApproval={(request, outcome) => { void handleApproval(request, outcome) }}
+          onQuestion={(request, answers) => { void handleQuestion(request, answers) }}
+          onSidechatSend={text => { void handleSidechatSend(text) }}
+          onSidechatStop={() => { void handleSidechatStop() }}
+          onSidechatNew={handleNewSidechat}
+          onSidechatThread={handleSelectSidechat}
+          onSidechatModel={handleSidechatModel}
+          onSidechatEffort={handleSidechatEffort}
+          onSidechatPermission={handleSidechatPermission}
           onGoalAction={action => { void handleGoalAction(action) }}
           onClose={() => setInspectorOpen(false)}
           onRefresh={() => {
@@ -2033,6 +2542,40 @@ export function App() {
           }}
         />
       )}
+
+      <OnboardingWizard
+        open={onboardingOpen}
+        codex={codexCatalog}
+        workspaces={visibleWorkspaces}
+        onClose={() => {
+          localStorage.setItem(ONBOARDING_STORAGE_KEY, 'true')
+          setOnboardingOpen(false)
+        }}
+        onComplete={() => {
+          localStorage.setItem(ONBOARDING_STORAGE_KEY, 'true')
+          setOnboardingOpen(false)
+        }}
+        onHostReady={async () => {
+          await refreshChrome()
+          await refreshCodexCatalog(true)
+        }}
+        onRefreshCodex={async () => { await refreshCodexCatalog(true) }}
+        onWorkspaceReady={workspace => {
+          void refreshChrome()
+          beginPendingSession(workspace)
+        }}
+      />
+
+      <GoalDialog
+        open={goalDialog !== undefined}
+        mode={goalDialog?.mode ?? 'create'}
+        initialObjective={goalDialog?.objective ?? ''}
+        initialRounds={goalDialog?.rounds ?? 8}
+        busy={goalDialogBusy}
+        error={goalDialogError}
+        onClose={() => { if (!goalDialogBusy) setGoalDialog(undefined) }}
+        onSubmit={(objective, rounds) => { void handleGoalSubmit(objective, rounds) }}
+      />
 
       <PluginManager
         open={pluginsOpen}
@@ -2091,8 +2634,8 @@ export function App() {
 
       <CommandPalette
         open={commandsOpen}
-        sessions={sessions}
-        workspaces={workspaces}
+        sessions={visibleSessions}
+        workspaces={visibleWorkspaces}
         selectedId={selectedId}
         dark={dark}
         inspectorOpen={inspectorOpen}

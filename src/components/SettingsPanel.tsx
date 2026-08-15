@@ -381,7 +381,7 @@ export function SettingsPanel({
                 <div className="settings-page-heading"><p>LOCAL DESKTOP CLIENT</p><h3>About</h3><span>Independent companion UI for DeepSeek Harness.</span></div>
                 <div className="settings-about">
                   <div className="settings-about-whale"><WhaleLogo size={38} /></div>
-                  <div><strong>DeepSeek Harness</strong><span>Version 0.1.2 · {platformName} {architecture}</span></div>
+                  <div><strong>DeepSeek Harness</strong><span>Version 0.2.0 · {platformName} {architecture}</span></div>
                 </div>
                 <div className="settings-card">
                   <Row title="Host source" detail="The upstream repository and localhost UI are not modified."><span className="settings-state">Untouched</span></Row>

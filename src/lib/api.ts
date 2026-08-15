@@ -21,17 +21,22 @@ import type {
   PluginToggleResult,
   PromptContentPart,
   QueueItem,
+  ReviewDocument,
+  ReviewSnapshot,
   RpcEnvelope,
   SessionSearchHit,
   SessionExportResult,
   SessionModels,
   SessionSummary,
+  SetupEvent,
+  SetupSnapshot,
   SkillEntry,
   SettingsDescription,
   SettingsNamespaceView,
   SettingsPathOpView,
   SubagentCatalog,
   SubagentEntry,
+  TerminalEvent,
   WorkspaceSummary,
   WorkspaceCreateResult,
 } from './types.ts'
@@ -379,6 +384,68 @@ export const codexApi = {
   respondApproval: (requestId: string | number, approved: boolean): Promise<void> => {
     if (window.dshDesktop === undefined) return Promise.reject(new Error('Codex CLI requires the desktop app'))
     return window.dshDesktop.codexRespondApproval(requestId, approved)
+  },
+}
+
+export const terminalApi = {
+  run: (input: { id: string; cwd: string; command: string }): Promise<{ accepted: true }> => {
+    if (window.dshDesktop === undefined) return Promise.reject(new Error('Terminal requires the desktop app'))
+    return window.dshDesktop.terminalRun(input)
+  },
+  stop: (id: string): Promise<void> => {
+    if (window.dshDesktop === undefined) return Promise.reject(new Error('Terminal requires the desktop app'))
+    return window.dshDesktop.terminalStop(id)
+  },
+  changeDirectory: (cwd: string, target: string): Promise<string> => {
+    if (window.dshDesktop === undefined) return Promise.reject(new Error('Terminal requires the desktop app'))
+    return window.dshDesktop.terminalChangeDirectory(cwd, target)
+  },
+}
+
+export function subscribeTerminal(onEvent: (event: TerminalEvent) => void): () => void {
+  return window.dshDesktop?.onTerminalEvent(onEvent) ?? (() => {})
+}
+
+export const setupApi = {
+  inspect: (): Promise<SetupSnapshot> => {
+    if (window.dshDesktop === undefined) return Promise.resolve({
+      platform: 'Linux',
+      host: { online: false, managed: false, error: 'Setup is available in the packaged desktop app.' },
+      node: { available: false, compatible: false },
+    })
+    return window.dshDesktop.setupInspect()
+  },
+  startHost: (): Promise<SetupSnapshot> => {
+    if (window.dshDesktop === undefined) return Promise.reject(new Error('Host setup requires the desktop app'))
+    return window.dshDesktop.setupStartHost()
+  },
+  stopHost: (): Promise<void> => window.dshDesktop?.setupStopHost() ?? Promise.resolve(),
+  openExternal: (target: 'deepseek-key' | 'node' | 'codex-install'): Promise<void> => {
+    if (window.dshDesktop === undefined) return Promise.reject(new Error('Setup links require the desktop app'))
+    return window.dshDesktop.setupOpenExternal(target)
+  },
+  openCodexLogin: (): Promise<void> => {
+    if (window.dshDesktop === undefined) return Promise.reject(new Error('Codex login requires the desktop app'))
+    return window.dshDesktop.setupOpenCodexLogin()
+  },
+}
+
+export function subscribeSetup(onEvent: (event: SetupEvent) => void): () => void {
+  return window.dshDesktop?.onSetupEvent(onEvent) ?? (() => {})
+}
+
+export const reviewApi = {
+  list: (input: { sessionId: string; cwd: string }): Promise<ReviewSnapshot> => {
+    if (window.dshDesktop === undefined) return Promise.reject(new Error('Workspace review requires the desktop app'))
+    return window.dshDesktop.reviewList(input)
+  },
+  read: (input: { sessionId: string; cwd: string; path: string }): Promise<ReviewDocument> => {
+    if (window.dshDesktop === undefined) return Promise.reject(new Error('Workspace review requires the desktop app'))
+    return window.dshDesktop.reviewRead(input)
+  },
+  write: (input: { sessionId: string; cwd: string; path: string; content: string; expectedHash: string }): Promise<ReviewDocument> => {
+    if (window.dshDesktop === undefined) return Promise.reject(new Error('Workspace review requires the desktop app'))
+    return window.dshDesktop.reviewWrite(input)
   },
 }
 

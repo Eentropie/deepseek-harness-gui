@@ -1,6 +1,8 @@
-import { randomUUID } from 'node:crypto'
-import { readFile, writeFile } from 'node:fs/promises'
-import { extname, isAbsolute, join, normalize, relative } from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { homedir } from 'node:os'
+import { readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { dirname, extname, isAbsolute, join, normalize, relative, resolve } from 'node:path'
 import {
   app,
   BrowserWindow,
@@ -8,6 +10,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  nativeImage,
   protocol,
   shell,
   type IpcMainInvokeEvent,
@@ -17,9 +20,17 @@ import { PluginController, resolveHostOrigin } from '../server/plugin-control.ts
 import { CodexAppServer } from './codex-app-server.ts'
 import { DeepSeekBillingService } from './deepseek-billing.ts'
 import { assertDesktopRpcPayload } from './rpc-policy.ts'
-import type { ProviderHandoffMessage } from '../src/lib/types.ts'
+import { SetupService } from './setup-service.ts'
+import type { ProviderHandoffMessage, ReviewDocument, ReviewSnapshot } from '../src/lib/types.ts'
 
 type ConnectionState = 'connecting' | 'connected' | 'reconnecting'
+
+interface TerminalProcess {
+  owner: number
+  child: ChildProcessWithoutNullStreams
+}
+
+const terminalProcesses = new Map<string, TerminalProcess>()
 
 interface RpcEnvelope<T> {
   rpcId?: string
@@ -404,24 +415,136 @@ async function exportSessionLog(sessionId: string, includeDescendants: boolean):
 }
 
 async function assertCodexWorkspace(sessionId: string, cwd: string): Promise<void> {
+  const sidechatRemainder = sessionId.startsWith('sidechat:') ? sessionId.slice('sidechat:'.length) : undefined
+  const ownerSessionId = sidechatRemainder === undefined
+    ? sessionId
+    : sidechatRemainder.split(':', 1)[0] ?? sidechatRemainder
   const [sessionPage, workspacePage] = await Promise.all([
     hostRpc<{ items: Array<{ sessionId: string; cwd?: string }> }>('session.list', {}),
     hostRpc<{ items: Array<{ path: string; sessionIds: string[] }> }>('workspace.list', {}),
   ])
-  const session = sessionPage.items.find(candidate => candidate.sessionId === sessionId)
+  const session = sessionPage.items.find(candidate => candidate.sessionId === ownerSessionId)
   if (session === undefined) throw new Error('Codex session is not present in the local Harness Host')
   const allowed = new Set<string>()
   if (session.cwd !== undefined) allowed.add(session.cwd)
   workspacePage.items.forEach(workspace => {
-    if (workspace.sessionIds.includes(sessionId)) allowed.add(workspace.path)
+    if (workspace.sessionIds.includes(ownerSessionId)) allowed.add(workspace.path)
   })
   if (!allowed.has(cwd)) throw new Error('Codex working directory is not owned by the selected Harness session')
+}
+
+async function canonicalTerminalDirectory(path: string): Promise<string> {
+  if (!isAbsolute(path) || path.length > 4_096) throw new Error('Terminal working directory must be an absolute path')
+  const canonical = await realpath(path)
+  if (!(await stat(canonical)).isDirectory()) throw new Error('Terminal working directory is not a directory')
+  return canonical
+}
+
+async function changeTerminalDirectory(cwd: string, rawTarget: string): Promise<string> {
+  const base = await canonicalTerminalDirectory(cwd)
+  const unquoted = rawTarget.trim().replace(/^(['"])([\s\S]*)\1$/, '$2')
+  const homeRelative = unquoted === '~'
+    ? homedir()
+    : /^~[\\/]/.test(unquoted)
+      ? join(homedir(), unquoted.slice(2))
+      : unquoted
+  return canonicalTerminalDirectory(homeRelative === '' ? homedir() : resolve(base, homeRelative))
+}
+
+function terminalInvocation(command: string): { executable: string; args: string[] } {
+  if (process.platform === 'win32') {
+    return { executable: process.env['ComSpec'] ?? 'cmd.exe', args: ['/d', '/s', '/c', command] }
+  }
+  const configured = process.env['SHELL']
+  const executable = configured !== undefined && isAbsolute(configured)
+    ? configured
+    : process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash'
+  return { executable, args: ['-lc', command] }
+}
+
+function stopTerminalProcesses(owner: number): void {
+  for (const [id, processRecord] of terminalProcesses) {
+    if (processRecord.owner !== owner) continue
+    processRecord.child.kill('SIGTERM')
+    terminalProcesses.delete(id)
+  }
+}
+
+async function git(cwd: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  const executable = process.platform === 'darwin' ? '/usr/bin/git' : 'git'
+  return await new Promise((resolvePromise, reject) => {
+    const child = spawn(executable, args, { cwd, windowsHide: true })
+    let stdout = ''
+    let stderr = ''
+    const append = (current: string, chunk: Buffer): string => `${current}${chunk.toString()}`.slice(-8_000_000)
+    child.stdout.on('data', chunk => { stdout = append(stdout, chunk) })
+    child.stderr.on('data', chunk => { stderr = append(stderr, chunk) })
+    child.once('error', reject)
+    child.once('close', code => resolvePromise({ code: code ?? 1, stdout, stderr }))
+  })
+}
+
+async function reviewFilePath(cwd: string, requestedPath: string): Promise<{ root: string; target: string; path: string }> {
+  if (requestedPath.includes('\0') || requestedPath.trim() === '' || isAbsolute(requestedPath)) throw new Error('Review path must be relative to the work folder')
+  const path = normalize(requestedPath).replaceAll('\\', '/')
+  if (path === '..' || path.startsWith('../')) throw new Error('Review path leaves the work folder')
+  const [root, target] = await Promise.all([realpath(cwd), realpath(resolve(cwd, path))])
+  const fromRoot = relative(root, target)
+  if (fromRoot === '..' || fromRoot.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(fromRoot)) {
+    throw new Error('Review path resolves outside the work folder')
+  }
+  const metadata = await stat(target)
+  if (!metadata.isFile() || metadata.size > 2_000_000) throw new Error('Review supports text files up to 2 MB')
+  return { root, target, path: fromRoot.replaceAll('\\', '/') }
+}
+
+function contentHash(content: Buffer | string): string {
+  return createHash('sha256').update(content).digest('hex')
+}
+
+async function reviewDocument(cwd: string, requestedPath: string): Promise<ReviewDocument> {
+  const resolved = await reviewFilePath(cwd, requestedPath)
+  const content = await readFile(resolved.target)
+  if (content.includes(0)) throw new Error('Binary files cannot be edited in Review')
+  let diff = ''
+  try {
+    const againstHead = await git(resolved.root, ['diff', '--no-ext-diff', '--no-color', 'HEAD', '--', resolved.path])
+    const fallback = againstHead.code === 0 ? againstHead : await git(resolved.root, ['diff', '--no-ext-diff', '--no-color', '--', resolved.path])
+    if (fallback.code === 0) diff = fallback.stdout
+  } catch {
+    // Reading and editing still work outside Git repositories.
+  }
+  return { path: resolved.path, content: content.toString('utf8'), diff, hash: contentHash(content) }
+}
+
+async function reviewSnapshot(cwd: string): Promise<ReviewSnapshot> {
+  try {
+    const root = await git(cwd, ['rev-parse', '--show-toplevel'])
+    if (root.code !== 0) return { git: false, files: [], error: root.stderr.trim() || 'This work folder is not a Git repository.' }
+    const status = await git(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])
+    if (status.code !== 0) return { git: true, files: [], error: status.stderr.trim() || 'Git status failed.' }
+    const records = status.stdout.split('\0')
+    const files: ReviewSnapshot['files'] = []
+    for (let index = 0; index < records.length; index += 1) {
+      const record = records[index]
+      if (record === undefined || record.length < 4) continue
+      const indexStatus = record[0] ?? ' '
+      const worktreeStatus = record[1] ?? ' '
+      const path = record.slice(3)
+      files.push({ path, indexStatus, worktreeStatus, untracked: indexStatus === '?' && worktreeStatus === '?' })
+      if (indexStatus === 'R' || indexStatus === 'C' || worktreeStatus === 'R' || worktreeStatus === 'C') index += 1
+    }
+    return { git: true, files }
+  } catch (reason) {
+    return { git: false, files: [], error: reason instanceof Error ? reason.message : String(reason) }
+  }
 }
 
 function installIpc(
   controller: PluginController,
   codex: CodexAppServer,
   billing: DeepSeekBillingService,
+  setup: SetupService,
   downlinks: (event: IpcMainInvokeEvent) => DownlinkClient | undefined,
 ): void {
   ipcMain.handle('dsh:rpc', async (event, method: unknown, payload: unknown) => {
@@ -580,6 +703,105 @@ function installIpc(
     if (typeof approved !== 'boolean') throw new Error('Codex approval decision is invalid')
     codex.respondApproval(requestIdentifier(requestId), approved)
   })
+  ipcMain.handle('dsh:setup-inspect', async event => {
+    assertTrustedSender(event)
+    return setup.inspect()
+  })
+  ipcMain.handle('dsh:setup-start-host', async event => {
+    assertTrustedSender(event)
+    return setup.startHost()
+  })
+  ipcMain.handle('dsh:setup-stop-host', event => {
+    assertTrustedSender(event)
+    setup.stopHost()
+  })
+  ipcMain.handle('dsh:setup-open-external', async (event, target: unknown) => {
+    assertTrustedSender(event)
+    if (target !== 'deepseek-key' && target !== 'node' && target !== 'codex-install') throw new Error('Unknown setup link')
+    await setup.openExternal(target)
+  })
+  ipcMain.handle('dsh:setup-open-codex-login', async event => {
+    assertTrustedSender(event)
+    await setup.openCodexLogin()
+  })
+  ipcMain.handle('dsh:review-list', async (event, raw: unknown) => {
+    assertTrustedSender(event)
+    const input = object(raw)
+    const sessionId = requiredString(input['sessionId'], 'review session id')
+    const cwd = requiredString(input['cwd'], 'review working directory')
+    await assertCodexWorkspace(sessionId, cwd)
+    return reviewSnapshot(cwd)
+  })
+  ipcMain.handle('dsh:review-read', async (event, raw: unknown) => {
+    assertTrustedSender(event)
+    const input = object(raw)
+    const sessionId = requiredString(input['sessionId'], 'review session id')
+    const cwd = requiredString(input['cwd'], 'review working directory')
+    await assertCodexWorkspace(sessionId, cwd)
+    return reviewDocument(cwd, requiredString(input['path'], 'review file path'))
+  })
+  ipcMain.handle('dsh:review-write', async (event, raw: unknown) => {
+    assertTrustedSender(event)
+    const input = object(raw)
+    const sessionId = requiredString(input['sessionId'], 'review session id')
+    const cwd = requiredString(input['cwd'], 'review working directory')
+    const path = requiredString(input['path'], 'review file path')
+    const content = requiredString(input['content'], 'review file content')
+    const expectedHash = requiredString(input['expectedHash'], 'review file hash')
+    if (content.length > 2_000_000 || !/^[a-f\d]{64}$/i.test(expectedHash)) throw new Error('Review write payload is invalid')
+    await assertCodexWorkspace(sessionId, cwd)
+    const resolved = await reviewFilePath(cwd, path)
+    const current = await readFile(resolved.target)
+    if (contentHash(current) !== expectedHash) throw new Error('The file changed on disk. Reload it before saving your edit.')
+    const metadata = await stat(resolved.target)
+    const temporary = join(dirname(resolved.target), `.${randomUUID()}.dsh-review.tmp`)
+    try {
+      await writeFile(temporary, content, { mode: metadata.mode })
+      await rename(temporary, resolved.target)
+    } catch (reason) {
+      await unlink(temporary).catch(() => undefined)
+      throw reason
+    }
+    return reviewDocument(cwd, resolved.path)
+  })
+  ipcMain.handle('dsh:terminal-run', async (event, raw: unknown) => {
+    assertTrustedSender(event)
+    const payload = object(raw)
+    const id = requiredString(payload['id'], 'terminal command id')
+    const command = requiredString(payload['command'], 'terminal command')
+    const cwd = await canonicalTerminalDirectory(requiredString(payload['cwd'], 'terminal working directory'))
+    if (id.length > 128 || command.length > 20_000 || terminalProcesses.has(id)) throw new Error('Terminal command payload is invalid')
+    const invocation = terminalInvocation(command)
+    const child = spawn(invocation.executable, invocation.args, {
+      cwd,
+      env: { ...process.env, TERM: 'dumb', NO_COLOR: '1' },
+      windowsHide: true,
+    })
+    terminalProcesses.set(id, { owner: event.sender.id, child })
+    const publish = (payload: object): void => {
+      if (!event.sender.isDestroyed()) event.sender.send('dsh:terminal-event', { id, ...payload })
+    }
+    child.stdout.on('data', chunk => publish({ type: 'data', stream: 'stdout', data: chunk.toString() }))
+    child.stderr.on('data', chunk => publish({ type: 'data', stream: 'stderr', data: chunk.toString() }))
+    child.once('error', reason => publish({ type: 'error', message: reason.message }))
+    child.once('close', (code, signal) => {
+      terminalProcesses.delete(id)
+      publish({ type: 'exit', code, signal })
+    })
+    return { accepted: true as const }
+  })
+  ipcMain.handle('dsh:terminal-stop', (event, rawId: unknown) => {
+    assertTrustedSender(event)
+    const id = requiredString(rawId, 'terminal command id')
+    const processRecord = terminalProcesses.get(id)
+    if (processRecord === undefined || processRecord.owner !== event.sender.id) return
+    processRecord.child.kill('SIGTERM')
+  })
+  ipcMain.handle('dsh:terminal-change-directory', async (event, rawCwd: unknown, rawTarget: unknown) => {
+    assertTrustedSender(event)
+    if (typeof rawTarget !== 'string' || rawTarget.length > 4_096) throw new Error('Terminal directory target is invalid')
+    return changeTerminalDirectory(requiredString(rawCwd, 'terminal working directory'), rawTarget)
+  })
 }
 
 const downlinkClients = new Map<number, DownlinkClient>()
@@ -594,6 +816,7 @@ function sessionIdFromArguments(argv: string[]): string | undefined {
 }
 
 function createMainWindow(initialSessionId?: string): BrowserWindow {
+  const appIconPath = join(app.getAppPath(), 'build', 'icon.png')
   const window = new BrowserWindow({
     width: 1440,
     height: 930,
@@ -601,9 +824,10 @@ function createMainWindow(initialSessionId?: string): BrowserWindow {
     minHeight: 680,
     show: false,
     title: 'DeepSeek Harness',
+    icon: appIconPath,
     backgroundColor: '#e7e7e7',
     ...(process.platform === 'darwin'
-      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 15, y: 17 } }
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 15, y: 14 } }
       : { titleBarStyle: 'default' as const, autoHideMenuBar: true }),
     webPreferences: {
       preload: join(app.getAppPath(), 'dist-electron', 'preload.cjs'),
@@ -647,6 +871,7 @@ function createMainWindow(initialSessionId?: string): BrowserWindow {
   window.on('closed', () => {
     downlinks.stop()
     downlinkClients.delete(webContentsId)
+    stopTerminalProcesses(webContentsId)
   })
   const target = new URL(`${APP_ORIGIN}/index.html`)
   if (initialSessionId !== undefined) target.searchParams.set('sessionId', initialSessionId)
@@ -656,6 +881,7 @@ function createMainWindow(initialSessionId?: string): BrowserWindow {
 }
 
 let codexServer: CodexAppServer | undefined
+let setupService: SetupService | undefined
 const singleInstanceLock = app.requestSingleInstanceLock()
 
 const startupSessionId = sessionIdFromArguments(process.argv)
@@ -689,16 +915,22 @@ app.on('open-url', (event, url) => {
 if (!singleInstanceLock) {
   app.quit()
 } else app.whenReady().then(async () => {
+  if (process.platform === 'win32') app.setAppUserModelId('ai.deepseek.harness.workbench')
+  if (process.platform === 'darwin' && app.dock !== undefined) {
+    const dockIcon = nativeImage.createFromPath(join(app.getAppPath(), 'build', 'icon.png'))
+    if (!dockIcon.isEmpty()) app.dock.setIcon(dockIcon)
+  }
   Menu.setApplicationMenu(null)
   await installAppProtocol()
   const controller = new PluginController()
   const billing = new DeepSeekBillingService(join(app.getPath('userData'), 'billing-credentials.json'))
+  setupService = new SetupService(HOST_ORIGIN, app.getPath('documents'), app.getPath('userData'))
   codexServer = new CodexAppServer(event => {
     BrowserWindow.getAllWindows().forEach(window => {
       if (!window.isDestroyed()) window.webContents.send('dsh:codex-event', event)
     })
   })
-  installIpc(controller, codexServer, billing, event => downlinkClients.get(event.sender.id))
+  installIpc(controller, codexServer, billing, setupService, event => downlinkClients.get(event.sender.id))
   app.setAsDefaultProtocolClient(APP_SCHEME)
   createMainWindow(pendingDeeplinks.shift())
   pendingDeeplinks.splice(0).forEach(sessionId => createMainWindow(sessionId))
@@ -717,6 +949,9 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  for (const owner of new Set([...terminalProcesses.values()].map(item => item.owner))) stopTerminalProcesses(owner)
   codexServer?.shutdown()
   codexServer = undefined
+  setupService?.shutdown()
+  setupService = undefined
 })
