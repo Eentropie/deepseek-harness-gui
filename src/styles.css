@@ -1519,6 +1519,75 @@ a:focus-visible {
   font: inherit;
 }
 
+.markdown-code-block {
+  position: relative;
+  max-width: 100%;
+  margin: 0 0 0.82em;
+}
+
+.markdown-code-block pre {
+  min-height: 46px;
+  margin: 0;
+  padding: 13px 72px 13px 14px;
+}
+
+.markdown-code-copy {
+  position: absolute;
+  z-index: 1;
+  top: 7px;
+  right: 7px;
+  min-width: 54px;
+  height: 28px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted-2);
+  background: color-mix(in srgb, var(--surface-soft) 88%, transparent);
+  font-family: var(--font-ui);
+  font-size: 9px;
+  font-weight: 580;
+  opacity: 0.72;
+  backdrop-filter: blur(8px);
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease, opacity 120ms ease, transform 120ms ease;
+}
+
+.markdown-code-block:hover .markdown-code-copy,
+.markdown-code-copy:focus-visible,
+.markdown-code-block[data-copy-state='copied'] .markdown-code-copy,
+.markdown-code-block[data-copy-state='failed'] .markdown-code-copy {
+  opacity: 1;
+}
+
+.markdown-code-copy:hover,
+.markdown-code-copy:focus-visible {
+  border-color: var(--border);
+  color: var(--ink-soft);
+  background: var(--surface-raised);
+}
+
+.markdown-code-copy:active { transform: scale(0.96); }
+.markdown-code-block[data-copy-state='copied'] .markdown-code-copy { color: var(--ink); }
+
+.markdown-code-language {
+  position: absolute;
+  z-index: 1;
+  top: 10px;
+  left: 13px;
+  color: var(--muted-2);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  line-height: 1;
+  text-transform: lowercase;
+}
+
+.markdown-code-block:has(.markdown-code-language) pre {
+  padding-top: 29px;
+}
+
 .inline-code {
   padding: 0.12em 0.34em;
   border: 1px solid var(--border);
