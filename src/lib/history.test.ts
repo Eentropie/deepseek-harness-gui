@@ -207,4 +207,19 @@ describe('projectQueue', () => {
       { id: 'image', placement: 'steering', content: [{ type: 'image' }], preview: '[image]', text: null },
     ])
   })
+
+  it('keeps renderer-only network policy out of queued message text', () => {
+    const queue = projectQueue({
+      type: 'session/queue',
+      items: [{
+        id: 'networked',
+        placement: 'queued',
+        message: { content: [
+          { type: 'text', text: '[[dsh-network-policy:v1]]\nInternal policy' },
+          { type: 'text', text: 'Actual follow-up' },
+        ] },
+      }],
+    })
+    expect(queue?.[0]).toMatchObject({ preview: 'Actual follow-up', text: 'Actual follow-up' })
+  })
 })

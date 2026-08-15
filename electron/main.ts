@@ -705,14 +705,24 @@ function installIpc(
     assertTrustedSender(event)
     return codex.readThread(requiredString(threadId, 'threadId'))
   })
+  ipcMain.handle('dsh:codex-steer', async (event, threadId: unknown, turnId: unknown, prompt: unknown) => {
+    assertTrustedSender(event)
+    return codex.steer(
+      requiredString(threadId, 'threadId'),
+      requiredString(turnId, 'turnId'),
+      requiredString(prompt, 'prompt'),
+    )
+  })
   ipcMain.handle('dsh:codex-interrupt', async (event, threadId: unknown, turnId: unknown) => {
     assertTrustedSender(event)
     await codex.interrupt(requiredString(threadId, 'threadId'), requiredString(turnId, 'turnId'))
   })
-  ipcMain.handle('dsh:codex-respond-approval', (event, requestId: unknown, approved: unknown) => {
+  ipcMain.handle('dsh:codex-respond-approval', (event, requestId: unknown, decision: unknown) => {
     assertTrustedSender(event)
-    if (typeof approved !== 'boolean') throw new Error('Codex approval decision is invalid')
-    codex.respondApproval(requestIdentifier(requestId), approved)
+    if (decision !== 'accept' && decision !== 'acceptForSession' && decision !== 'decline') {
+      throw new Error('Codex approval decision is invalid')
+    }
+    codex.respondApproval(requestIdentifier(requestId), decision)
   })
   ipcMain.handle('dsh:setup-inspect', async event => {
     assertTrustedSender(event)

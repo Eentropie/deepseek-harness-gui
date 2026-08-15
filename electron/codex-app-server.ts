@@ -4,8 +4,10 @@ import { isAbsolute } from 'node:path'
 import type {
   CodexCatalog,
   CodexCatalogModel,
+  CodexApprovalDecision,
   CodexEvent,
   CodexPromptResult,
+  CodexSteerResult,
   CodexThreadSnapshot,
   CodexUsageSnapshot,
   ProviderHandoffMessage,
@@ -208,6 +210,21 @@ export class CodexAppServer {
     return { threadId, messages: projectCodexThread(response) }
   }
 
+  async steer(threadId: string, turnId: string, prompt: string): Promise<CodexSteerResult> {
+    this.assertIdentifier(threadId, 'thread id')
+    this.assertIdentifier(turnId, 'turn id')
+    if (prompt.trim() === '') throw new Error('Codex steering prompt must not be empty')
+    await this.ensureStarted()
+    const response = record(await this.request('turn/steer', {
+      threadId,
+      expectedTurnId: turnId,
+      input: [{ type: 'text', text: prompt, text_elements: [] }],
+    }, 60_000))
+    const steeredTurnId = string(response?.['turnId'])
+    if (steeredTurnId === undefined) throw new Error('Codex did not confirm the steered turn')
+    return { turnId: steeredTurnId }
+  }
+
   async interrupt(threadId: string, turnId: string): Promise<void> {
     this.assertIdentifier(threadId, 'thread id')
     this.assertIdentifier(turnId, 'turn id')
@@ -215,11 +232,11 @@ export class CodexAppServer {
     await this.request('turn/interrupt', { threadId, turnId })
   }
 
-  respondApproval(requestId: string | number, approved: boolean): void {
+  respondApproval(requestId: string | number, decision: CodexApprovalDecision): void {
     const method = this.incomingApprovals.get(requestId)
     if (method === undefined) throw new Error('Codex approval request is no longer pending')
     this.incomingApprovals.delete(requestId)
-    this.respond(requestId, { decision: approved ? 'accept' : 'decline' })
+    this.respond(requestId, { decision })
   }
 
   shutdown(): void {

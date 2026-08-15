@@ -94,4 +94,37 @@ describe('Composer send control', () => {
     expect(markup).toContain('applies from the next model step or turn')
     expect(markup).toContain('aria-label="Web access"')
   })
+
+  it('shows separate queue and send-now controls while the agent is running', () => {
+    const markup = renderToStaticMarkup(
+      <Composer
+        value="Follow up"
+        onChange={noop}
+        onSend={noop}
+        onStop={noop}
+        disabled={false}
+        running
+        busy={false}
+        permissionOptions={[]}
+        onModel={noop}
+        onEffort={noop}
+        onPermission={noop}
+        networkMode="auto"
+        networkAvailable
+        networkOnline
+        onNetworkMode={noop}
+        onExitPlan={noop}
+        attachments={[]}
+        onAddFiles={noop}
+        onRemoveAttachment={noop}
+        queue={[]}
+        onQueueAction={noop}
+      />,
+    )
+    expect(markup).toContain('aria-label="Stop"')
+    expect(markup).toContain('aria-label="Queue message"')
+    expect(markup).toContain('aria-label="Choose message delivery"')
+    expect(markup).toContain('Enter to queue')
+    expect(markup).toContain('Enter to send now')
+  })
 })

@@ -9,7 +9,7 @@ import type {
   QueueItem,
   ToolStatus,
 } from './types.ts'
-import { visibleProviderBlocks } from './provider-handoff.ts'
+import { visibleProviderBlocks, visibleProviderText } from './provider-handoff.ts'
 import { composeTurnBlocks } from './thought-process.ts'
 import { webToolView } from './web-tools.ts'
 
@@ -578,13 +578,16 @@ function queueContent(value: unknown): unknown[] {
 
 function queueText(content: unknown[]): string | null {
   if (!content.every(item => record(item)?.['type'] === 'text')) return null
-  return content.map(item => string(record(item)?.['text']) ?? '').join('')
+  return content.flatMap(item => {
+    const visible = visibleProviderText(string(record(item)?.['text']) ?? '')
+    return visible === undefined ? [] : [visible]
+  }).join('')
 }
 
 function queuePreview(content: unknown[]): string {
   const text = content.map(item => {
     const block = record(item)
-    if (block?.['type'] === 'text') return string(block['text']) ?? ''
+    if (block?.['type'] === 'text') return visibleProviderText(string(block['text']) ?? '') ?? ''
     return `[${String(block?.['type'] ?? 'content')}]`
   }).join(' ').replace(/\s+/g, ' ').trim()
   return Array.from(text).length > 200 ? `${Array.from(text).slice(0, 200).join('')}…` : text

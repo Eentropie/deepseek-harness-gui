@@ -186,6 +186,7 @@ export interface QueueItem {
   content: unknown[]
   preview: string
   text: string | null
+  source?: 'host' | 'codex'
 }
 
 export interface SessionSearchHit {
@@ -419,6 +420,10 @@ export interface CodexPromptResult {
   turnId: string
 }
 
+export interface CodexSteerResult {
+  turnId: string
+}
+
 export interface ProviderHandoffMessage {
   role: 'user' | 'assistant'
   text: string
@@ -426,6 +431,7 @@ export interface ProviderHandoffMessage {
 }
 
 export type CodexPermissionMode = 'ask-for-approval' | 'approve-for-me' | 'full-access'
+export type CodexApprovalDecision = 'accept' | 'acceptForSession' | 'decline'
 
 export type NetworkMode = 'off' | 'auto' | 'ask'
 export type EffectiveNetworkMode = Exclude<NetworkMode, 'ask'>

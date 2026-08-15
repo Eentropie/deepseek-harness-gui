@@ -1,7 +1,9 @@
 import type {
   CodexCatalog,
   CodexEvent,
+  CodexApprovalDecision,
   CodexPromptResult,
+  CodexSteerResult,
   CodexThreadSnapshot,
   CodexUsageSnapshot,
   DeepSeekBillingSnapshot,
@@ -53,8 +55,9 @@ interface DeepSeekDesktopBridge {
     context?: import('./lib/types.ts').ProviderHandoffMessage[]
   }) => Promise<CodexPromptResult>
   codexReadThread: (threadId: string) => Promise<CodexThreadSnapshot>
+  codexSteer: (threadId: string, turnId: string, prompt: string) => Promise<CodexSteerResult>
   codexInterrupt: (threadId: string, turnId: string) => Promise<void>
-  codexRespondApproval: (requestId: string | number, approved: boolean) => Promise<void>
+  codexRespondApproval: (requestId: string | number, decision: CodexApprovalDecision) => Promise<void>
   terminalRun: (input: { id: string; cwd: string; command: string }) => Promise<{ accepted: true }>
   terminalStop: (id: string) => Promise<void>
   terminalChangeDirectory: (cwd: string, target: string) => Promise<string>

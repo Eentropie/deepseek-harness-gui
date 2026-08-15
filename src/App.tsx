@@ -18,6 +18,7 @@ import {
 import { Sidebar } from './components/Sidebar.tsx'
 import { TerminalDock } from './components/TerminalDock.tsx'
 import { codexApi, harnessApi, subscribeCodex, subscribeDownlinks } from './lib/api.ts'
+import { persistentHostPermission, type ApprovalChoice } from './lib/approval.ts'
 import { applyCodexDeltas, applyCodexToolEvent, type CodexDeltaEvent } from './lib/codex-stream.ts'
 import {
   appendLiveHistory,
@@ -103,6 +104,7 @@ const SIDECHAT_ACTIVE_STORAGE_KEY = 'dsh-workbench-sidechat-active-v1'
 const TERMINAL_OPEN_STORAGE_KEY = 'dsh-workbench-terminal-open'
 const ONBOARDING_STORAGE_KEY = 'dsh-workbench-onboarding-v1'
 const NETWORK_MODES_STORAGE_KEY = 'dsh-workbench-network-modes-v1'
+const CODEX_QUEUES_STORAGE_KEY = 'dsh-workbench-codex-queues-v1'
 const STARTUP_GREETING = (() => {
   const greeting = chooseGreeting(new Date(), localStorage.getItem(GREETING_STORAGE_KEY) ?? undefined)
   localStorage.setItem(GREETING_STORAGE_KEY, greeting)
@@ -124,6 +126,17 @@ interface PendingSession {
   workspaceId?: string
   cwd?: string
   agentPreset?: string
+}
+
+interface CodexQueuedPrompt {
+  id: string
+  prompt: string
+  cwd: string
+  model: string
+  effort: string
+  permission: CodexPermissionMode
+  network: EffectiveNetworkMode
+  createdAt: number
 }
 
 interface SidechatSelection {
@@ -282,6 +295,46 @@ function storedNetworkModes(): Record<string, NetworkMode> {
   }
 }
 
+function storedCodexQueues(): Record<string, CodexQueuedPrompt[]> {
+  try {
+    const value = JSON.parse(localStorage.getItem(CODEX_QUEUES_STORAGE_KEY) ?? '{}') as unknown
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+    const queues: Record<string, CodexQueuedPrompt[]> = {}
+    for (const [sessionId, rawItems] of Object.entries(value as Record<string, unknown>)) {
+      if (!Array.isArray(rawItems)) continue
+      const items = rawItems.flatMap(raw => {
+        if (typeof raw !== 'object' || raw === null) return []
+        const item = raw as Record<string, unknown>
+        const permission = item['permission']
+        const network = item['network']
+        if (typeof item['id'] !== 'string' || typeof item['prompt'] !== 'string' || item['prompt'].trim() === ''
+          || typeof item['cwd'] !== 'string' || typeof item['model'] !== 'string' || typeof item['effort'] !== 'string'
+          || (permission !== 'ask-for-approval' && permission !== 'approve-for-me' && permission !== 'full-access')
+          || (network !== 'off' && network !== 'auto')) return []
+        return [{
+          id: item['id'],
+          prompt: item['prompt'],
+          cwd: item['cwd'],
+          model: item['model'],
+          effort: item['effort'],
+          permission,
+          network,
+          createdAt: typeof item['createdAt'] === 'number' ? item['createdAt'] : Date.now(),
+        } satisfies CodexQueuedPrompt]
+      }).slice(0, 40)
+      if (items.length > 0) queues[sessionId] = items
+    }
+    return queues
+  } catch {
+    return {}
+  }
+}
+
+function queuedPreview(value: string): string {
+  const compact = value.replace(/\s+/g, ' ').trim()
+  return Array.from(compact).length > 200 ? `${Array.from(compact).slice(0, 200).join('')}…` : compact
+}
+
 function effectiveNetworkMode(mode: NetworkMode): EffectiveNetworkMode {
   if (mode !== 'ask') return mode
   return window.confirm('Allow web search and page fetching for this turn?') ? 'auto' : 'off'
@@ -346,6 +399,7 @@ export function App() {
   const [networkModes, setNetworkModes] = useState<Record<string, NetworkMode>>(storedNetworkModes)
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const [queueBySession, setQueueBySession] = useState<Record<string, QueueItem[]>>({})
+  const [codexQueues, setCodexQueues] = useState<Record<string, CodexQueuedPrompt[]>>(storedCodexQueues)
   const [jobsBySession, setJobsBySession] = useState<Record<string, JobView[]>>({})
   const [searchHits, setSearchHits] = useState<SessionSearchHit[]>([])
   const [searching, setSearching] = useState(false)
@@ -399,6 +453,10 @@ export function App() {
   const conversationProjector = useRef<{ owner: string; projector: ConversationProjector }>()
   const codexDeltaQueue = useRef<CodexDeltaEvent[]>([])
   const codexDeltaTimer = useRef<number>()
+  const codexRunningRef = useRef(false)
+  const codexTurnIdRef = useRef<string>()
+  const codexQueuesRef = useRef(codexQueues)
+  const codexDrainInFlight = useRef(new Set<string>())
   const sidechatOwnerRef = useRef<string>()
   const sidechatCodexActiveRef = useRef(false)
   const sidechatGeneration = useRef(0)
@@ -517,7 +575,6 @@ export function App() {
   const activity = useMemo(() => projectActivity(history.events), [history.events])
   const projectionValues = history.projections?.values ?? selected?.projections?.values
   const permissions = projectionValues?.permissions
-  const activeQueue = selectedId === undefined || subagentView !== undefined ? [] : queueBySession[selectedId] ?? []
   const activeSubagent = subagentView === undefined
     ? undefined
     : subagents?.entries.find((entry): entry is Extract<SubagentEntry, { kind: 'child' }> => entry.kind === 'child' && entry.id === subagentView.childSessionId)
@@ -568,6 +625,18 @@ export function App() {
     }
   }, [codexCatalog, codexSession, models])
   const codexActive = subagentView === undefined && presentedModels?.current.provider === CODEX_PROVIDER
+  const activeQueue = useMemo<QueueItem[]>(() => {
+    if (selectedId === undefined || subagentView !== undefined) return []
+    if (!codexActive) return queueBySession[selectedId] ?? []
+    return (codexQueues[selectedId] ?? []).map(item => ({
+      id: item.id,
+      placement: 'queued',
+      content: [{ type: 'text', text: item.prompt }],
+      preview: queuedPreview(item.prompt),
+      text: item.prompt,
+      source: 'codex',
+    }))
+  }, [codexActive, codexQueues, queueBySession, selectedId, subagentView])
   const codexPermission = codexSession.permission ?? DEFAULT_CODEX_PERMISSION
   const presentedPermissionOptions = codexActive
     ? CODEX_PERMISSION_OPTIONS
@@ -725,6 +794,15 @@ export function App() {
   }, [networkModes])
 
   useEffect(() => {
+    codexQueuesRef.current = codexQueues
+    try {
+      localStorage.setItem(CODEX_QUEUES_STORAGE_KEY, JSON.stringify(codexQueues))
+    } catch {
+      // Keep queued follow-ups in memory if local storage is temporarily unavailable.
+    }
+  }, [codexQueues])
+
+  useEffect(() => {
     void refreshCodexCatalog(true)
   }, [refreshCodexCatalog])
 
@@ -749,6 +827,81 @@ export function App() {
     codexDeltaTimer.current = window.setTimeout(flushCodexDeltas, 48)
   }, [flushCodexDeltas])
 
+  const updateCodexQueues = useCallback((update: (current: Record<string, CodexQueuedPrompt[]>) => Record<string, CodexQueuedPrompt[]>): void => {
+    const next = update(codexQueuesRef.current)
+    codexQueuesRef.current = next
+    setCodexQueues(next)
+  }, [])
+
+  const drainCodexQueue = useCallback(async (sessionId: string, threadId: string, itemId?: string): Promise<boolean> => {
+    if (codexDrainInFlight.current.has(sessionId)) return false
+    const queue = codexQueuesRef.current[sessionId] ?? []
+    const item = itemId === undefined ? queue[0] : queue.find(candidate => candidate.id === itemId)
+    if (item === undefined) return false
+    codexDrainInFlight.current.add(sessionId)
+    const optimisticId = `codex-queued-user-${item.id}`
+    const selected = selectedRef.current === sessionId
+    try {
+      if (selected) {
+        codexRunningRef.current = true
+        setCodexRunning(true)
+        setCodexMessages(messages => [...messages, {
+          id: optimisticId,
+          seq: (messages.at(-1)?.seq ?? 0) + 1,
+          time: Date.now(),
+          role: 'user',
+          blocks: [{ kind: 'text', text: item.prompt }],
+        }])
+        setConversationScrollRequest(current => current + 1)
+      }
+      const result = await codexApi.prompt({
+        sessionId,
+        threadId,
+        cwd: item.cwd,
+        model: item.model,
+        effort: item.effort,
+        permission: item.permission,
+        network: item.network,
+        prompt: item.prompt,
+      })
+      const state = readCodexSession(sessionId)
+      const next: CodexSessionState = {
+        ...state,
+        active: true,
+        threadId: result.threadId,
+        model: item.model,
+        effort: item.effort,
+        permission: item.permission,
+      }
+      writeCodexSession(sessionId, next)
+      updateCodexQueues(current => {
+        const remaining = (current[sessionId] ?? []).filter(candidate => candidate.id !== item.id)
+        const { [sessionId]: _removed, ...rest } = current
+        return remaining.length === 0 ? rest : { ...rest, [sessionId]: remaining }
+      })
+      if (selectedRef.current === sessionId) {
+        setCodexSession(next)
+        codexRunningRef.current = true
+        codexTurnIdRef.current = result.turnId
+        setCodexTurnId(result.turnId)
+        setCodexRunning(true)
+      }
+      return true
+    } catch (reason) {
+      if (selectedRef.current === sessionId) {
+        setCodexMessages(messages => messages.filter(message => message.id !== optimisticId))
+        codexRunningRef.current = false
+        codexTurnIdRef.current = undefined
+        setCodexRunning(false)
+        setCodexTurnId(undefined)
+        setActionError(`Codex 排队消息发送失败：${errorText(reason)}`)
+      }
+      return false
+    } finally {
+      codexDrainInFlight.current.delete(sessionId)
+    }
+  }, [updateCodexQueues])
+
   useEffect(() => () => {
     if (codexDeltaTimer.current !== undefined) window.clearTimeout(codexDeltaTimer.current)
   }, [])
@@ -758,6 +911,8 @@ export function App() {
     codexDeltaTimer.current = undefined
     codexDeltaQueue.current = []
     setCodexMessages([])
+    codexRunningRef.current = false
+    codexTurnIdRef.current = undefined
     setCodexRunning(false)
     setCodexTurnId(undefined)
     const stateKey = selectedId ?? pendingSession?.key
@@ -815,7 +970,7 @@ export function App() {
     if (event.type === 'approval-requested') {
       const requestSessionId = event.sessionId ?? selectedRef.current
       if (requestSessionId === undefined) {
-        void codexApi.respondApproval(event.requestId, false)
+        void codexApi.respondApproval(event.requestId, 'decline')
         return
       }
       const rpcId = `codex-${String(event.requestId)}`
@@ -868,8 +1023,11 @@ export function App() {
       }
       return
     }
-    if (sessionId !== undefined && sessionId !== selectedRef.current) return
+    const targetsSelectedSession = sessionId === undefined || sessionId === selectedRef.current
+    if (!targetsSelectedSession && event.type !== 'turn-completed') return
     if (event.type === 'turn-started') {
+      codexRunningRef.current = true
+      codexTurnIdRef.current = event.turnId
       setCodexRunning(true)
       setCodexTurnId(event.turnId)
       return
@@ -883,22 +1041,39 @@ export function App() {
       return
     }
     if (event.type === 'turn-completed') {
-      flushCodexDeltas()
-      setCodexTurnId(undefined)
-      if (event.status === 'failed') setActionError(`Codex 运行失败：${event.error ?? 'Unknown error'}`)
-      void codexApi.readThread(event.threadId).then(snapshot => {
-        if (event.sessionId === undefined || event.sessionId === selectedRef.current) setCodexMessages(snapshot.messages)
-      }).catch(reason => setActionError(`Codex 线程刷新失败：${errorText(reason)}`))
-        .finally(() => setCodexRunning(false))
+      const ownerSessionId = event.sessionId ?? selectedRef.current
+      if (targetsSelectedSession) {
+        codexRunningRef.current = false
+        codexTurnIdRef.current = undefined
+        flushCodexDeltas()
+        setCodexTurnId(undefined)
+        if (event.status === 'failed') setActionError(`Codex 运行失败：${event.error ?? 'Unknown error'}`)
+      }
+      void (async () => {
+        if (targetsSelectedSession) {
+          try {
+            const snapshot = await codexApi.readThread(event.threadId)
+            if (event.sessionId === undefined || event.sessionId === selectedRef.current) setCodexMessages(snapshot.messages)
+          } catch (reason) {
+            setActionError(`Codex 线程刷新失败：${errorText(reason)}`)
+          }
+        }
+        const drained = event.status === 'completed' && ownerSessionId !== undefined
+          ? await drainCodexQueue(ownerSessionId, event.threadId)
+          : false
+        if (targetsSelectedSession && !drained) setCodexRunning(false)
+      })()
       return
     }
     if (event.type === 'error') {
       flushCodexDeltas()
+      codexRunningRef.current = false
+      codexTurnIdRef.current = undefined
       setCodexRunning(false)
       setCodexTurnId(undefined)
       setActionError(`Codex CLI：${event.message}`)
     }
-  }), [flushCodexDeltas, queueCodexDelta])
+  }), [drainCodexQueue, flushCodexDeltas, queueCodexDelta])
 
   useEffect(() => {
     const ownerSessionId = subagentView?.childSessionId ?? selectedId
@@ -1392,16 +1567,30 @@ export function App() {
     })
   }, [])
 
-  const handleApproval = useCallback(async (request: ApprovalRequest, outcome: 'allowed-once' | 'rejected'): Promise<void> => {
+  const handleApproval = useCallback(async (request: ApprovalRequest, outcome: ApprovalChoice): Promise<void> => {
     try {
       if (request.source === 'codex' && request.codexRequestId !== undefined) {
-        await codexApi.respondApproval(request.codexRequestId, outcome === 'allowed-once')
+        await codexApi.respondApproval(request.codexRequestId, outcome === 'rejected'
+          ? 'decline'
+          : outcome === 'allowed-session' ? 'acceptForSession' : 'accept')
         setPendingApprovals(current => current.filter(item => item.rpcId !== request.rpcId))
         return
       }
+      if (outcome === 'allowed-session') {
+        const permission = persistentHostPermission(request)
+        if (permission === undefined) throw new Error('This Host approval cannot be persisted safely')
+        if (permission === 'danger-full-access' && !window.confirm('Always allow will switch this session to Full access for future commands. Continue?')) return
+        // The Host approval protocol itself is one-shot. Steer its permission preset first,
+        // then release the blocked call once so later model steps inherit the wider policy.
+        await harnessApi.setPermission(request.sessionId, permission, 'steer')
+      }
       const receipt = await harnessApi.respond(request.rpcId, {
         ok: true,
-        value: { sessionId: request.sessionId, approvalId: request.approvalId, outcome },
+        value: {
+          sessionId: request.sessionId,
+          approvalId: request.approvalId,
+          outcome: outcome === 'rejected' ? 'rejected' : 'allowed-once',
+        },
       })
       if (!receipt.accepted) throw new Error(receipt.reason ?? 'Host rejected the approval response')
       setPendingApprovals(current => current.filter(item => item.rpcId !== request.rpcId))
@@ -1617,9 +1806,14 @@ export function App() {
     setDrafts(current => ({ ...current, [key]: current[key] ?? 'Help me create a custom DeepSeek Harness agent preset for ' }))
   }
 
-  const handleSend = async (): Promise<void> => {
+  const handleSend = async (requestedMode: 'queue' | 'steer' = 'queue'): Promise<void> => {
     const prompt = draft.trim()
     if ((prompt === '' && attachments.length === 0) || busy) return
+    const codexWasRunning = codexRunningRef.current
+    const runningNow = codexActive
+      ? codexRunningRef.current
+      : subagentView === undefined ? selected?.running === true : activeSubagent?.activity === 'running'
+    const deliveryMode = runningNow ? requestedMode : 'queue'
     const networkForTurn = effectiveNetworkMode(networkMode)
     const tailBeforeSend = historyRef.current.events.at(-1)?.event.seq
     const sourceDraftKey = draftKey
@@ -1630,7 +1824,7 @@ export function App() {
     const pendingPermission = wasPending
       ? permissionOverrideForNewSession(pendingHostPermission, DEFAULT_HOST_PERMISSION)
       : undefined
-    const transition = codexActive
+    const transition = codexActive || runningNow
       ? undefined
       : createPendingTurn(sourceOwner, prompt, submittedAttachments, tailBeforeSend ?? -1)
     setConversationScrollRequest(current => current + 1)
@@ -1660,10 +1854,52 @@ export function App() {
         }
       }
       if (codexActive) {
-        if (attachments.length > 0) throw new Error('Codex CLI 当前只接受文本输入')
+        if (submittedAttachments.length > 0) throw new Error('Codex CLI 当前只接受文本输入')
         const current = presentedModels?.current
         const cwd = activeWorkspace?.path ?? pendingSession?.cwd ?? selected?.cwd ?? host?.cwd
         if (current === undefined || cwd === undefined) throw new Error('Codex model or work folder is unavailable')
+        if (codexRunningRef.current) {
+          const activeTurnId = codexTurnIdRef.current
+          if (codexSession.threadId === undefined || activeTurnId === undefined) {
+            throw new Error('Codex current turn is not ready for a follow-up yet')
+          }
+          if (deliveryMode === 'queue') {
+            const item: CodexQueuedPrompt = {
+              id: `codex-queue-${crypto.randomUUID()}`,
+              prompt,
+              cwd,
+              model: current.model,
+              effort: current.reasoningEffort ?? 'medium',
+              permission: codexPermission,
+              network: networkForTurn,
+              createdAt: Date.now(),
+            }
+            updateCodexQueues(queues => ({
+              ...queues,
+              [sessionId]: [...(queues[sessionId] ?? []), item].slice(-40),
+            }))
+          } else {
+            const optimisticId = `codex-steer-user-${Date.now()}`
+            setCodexMessages(messages => [...messages, {
+              id: optimisticId,
+              seq: (messages.at(-1)?.seq ?? 0) + 1,
+              time: Date.now(),
+              role: 'user',
+              blocks: [{ kind: 'text', text: prompt }],
+            }])
+            try {
+              await codexApi.steer(codexSession.threadId, activeTurnId, prompt)
+            } catch (reason) {
+              setCodexMessages(messages => messages.filter(message => message.id !== optimisticId))
+              throw reason
+            }
+          }
+          setDrafts(currentDrafts => {
+            const { [sourceDraftKey]: _submitted, ...rest } = currentDrafts
+            return rest
+          })
+          return
+        }
         const optimisticId = `codex-user-${Date.now()}`
         setCodexMessages(messages => [...messages, {
           id: optimisticId,
@@ -1672,6 +1908,7 @@ export function App() {
           role: 'user',
           blocks: [{ kind: 'text', text: prompt }],
         }])
+        codexRunningRef.current = true
         setCodexRunning(true)
         const handoff = collectProviderHandoff(retainedDeepSeekMessages, codexSession.codexImportedHostSeq ?? 0)
         const result = await codexApi.prompt({
@@ -1696,6 +1933,7 @@ export function App() {
         }
         setCodexSession(next)
         writeCodexSession(sessionId, next)
+        codexTurnIdRef.current = result.turnId
         setCodexTurnId(result.turnId)
         setDrafts(current => {
           const nextDrafts = { ...current }
@@ -1725,7 +1963,7 @@ export function App() {
           ...(prompt === '' ? [] : [{ type: 'text' as const, text: prompt }]),
           ...attachments.map(item => ({ type: 'image' as const, mediaType: item.mediaType, data: item.data, name: item.name })),
         ]
-        await harnessApi.prompt(sessionId, content)
+        await harnessApi.prompt(sessionId, content, deliveryMode)
         if (handoff.throughSeq !== undefined) {
           const next = { ...codexSession, active: false, deepSeekImportedCodexSeq: handoff.throughSeq }
           setCodexSession(next)
@@ -1735,6 +1973,10 @@ export function App() {
       releaseAttachments(submittedAttachments)
       const submittedIds = new Set(submittedAttachments.map(item => item.id))
       setAttachments(current => current.filter(item => !submittedIds.has(item.id)))
+      setDrafts(current => {
+        const { [sourceDraftKey]: _submitted, ...rest } = current
+        return rest
+      })
       void refreshChrome()
       window.setTimeout(() => {
         if (selectedRef.current !== sessionId) return
@@ -1745,7 +1987,9 @@ export function App() {
         if (!liveEventLanded) void refreshSession(sessionId)
       }, 700)
     } catch (reason) {
-      if (codexActive) {
+      if (codexActive && !codexWasRunning) {
+        codexRunningRef.current = false
+        codexTurnIdRef.current = undefined
         setCodexRunning(false)
         setCodexTurnId(undefined)
       }
@@ -1776,8 +2020,8 @@ export function App() {
     setBusy(true)
     setActionError(undefined)
     try {
-      if (codexRunning && codexSession.threadId !== undefined && codexTurnId !== undefined) {
-        await codexApi.interrupt(codexSession.threadId, codexTurnId)
+      if (codexRunningRef.current && codexSession.threadId !== undefined && codexTurnIdRef.current !== undefined) {
+        await codexApi.interrupt(codexSession.threadId, codexTurnIdRef.current)
         return
       }
       if (subagentView !== undefined) {
@@ -2263,6 +2507,56 @@ export function App() {
     if (selectedId === undefined || subagentView !== undefined || busy) return
     setBusy(true)
     try {
+      const codexItem = codexQueuesRef.current[selectedId]?.find(item => item.id === itemId)
+      if (codexItem !== undefined) {
+        if (action.kind === 'edit') {
+          const prompt = action.text.trim()
+          if (prompt === '') throw new Error('Queued message cannot be empty')
+          updateCodexQueues(current => ({
+            ...current,
+            [selectedId]: (current[selectedId] ?? []).map(item => item.id === itemId ? { ...item, prompt } : item),
+          }))
+          return
+        }
+        if (action.kind === 'remove') {
+          updateCodexQueues(current => {
+            const remaining = (current[selectedId] ?? []).filter(item => item.id !== itemId)
+            const { [selectedId]: _removed, ...rest } = current
+            return remaining.length === 0 ? rest : { ...rest, [selectedId]: remaining }
+          })
+          return
+        }
+        if (!codexRunningRef.current) {
+          const state = readCodexSession(selectedId)
+          if (state.threadId === undefined) throw new Error('This Codex queue has no thread to resume')
+          await drainCodexQueue(selectedId, state.threadId, itemId)
+          return
+        }
+        if (codexSession.threadId === undefined || codexTurnIdRef.current === undefined) {
+          throw new Error('Codex current turn is not ready for steering')
+        }
+        const optimisticId = `codex-steer-user-${codexItem.id}`
+        setCodexMessages(messages => [...messages, {
+          id: optimisticId,
+          seq: (messages.at(-1)?.seq ?? 0) + 1,
+          time: Date.now(),
+          role: 'user',
+          blocks: [{ kind: 'text', text: codexItem.prompt }],
+        }])
+        try {
+          await codexApi.steer(codexSession.threadId, codexTurnIdRef.current, codexItem.prompt)
+        } catch (reason) {
+          setCodexMessages(messages => messages.filter(message => message.id !== optimisticId))
+          throw reason
+        }
+        updateCodexQueues(current => {
+          const remaining = (current[selectedId] ?? []).filter(item => item.id !== itemId)
+          const { [selectedId]: _removed, ...rest } = current
+          return remaining.length === 0 ? rest : { ...rest, [selectedId]: remaining }
+        })
+        setConversationScrollRequest(current => current + 1)
+        return
+      }
       await harnessApi.updateQueue(selectedId, itemId, action.kind === 'edit'
         ? { kind: 'edit', content: [{ type: 'text', text: action.text }] }
         : action)
@@ -2534,7 +2828,7 @@ export function App() {
         <Composer
           value={draft}
           onChange={setDraft}
-          onSend={() => { void handleSend() }}
+          onSend={mode => { void handleSend(mode) }}
           onStop={() => { void handleStop() }}
           disabled={codexActive ? !codexCatalog.available || (selectedId === undefined && pendingSession === undefined) : subagentView?.mode === 'one-shot' || offline}
           running={activeRunning}

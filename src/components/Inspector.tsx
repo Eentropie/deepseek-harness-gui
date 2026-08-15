@@ -19,6 +19,7 @@ import type {
   WorkspaceSummary,
 } from '../lib/types.ts'
 import { platformBasename } from '../lib/platform.ts'
+import type { ApprovalChoice } from '../lib/approval.ts'
 
 type InspectorView = 'context' | 'review' | 'sidechat' | 'agents'
 
@@ -50,7 +51,7 @@ interface InspectorProps {
   onUseSkill: (name: string) => void
   onOpenSubagent: (entry: Extract<SubagentEntry, { kind: 'child' }>) => void
   onExitSubagent: () => void
-  onApproval: (request: ApprovalRequest, outcome: 'allowed-once' | 'rejected') => void
+  onApproval: (request: ApprovalRequest, outcome: ApprovalChoice) => void
   onQuestion: (request: QuestionRequest, answers: QuestionAnswer[]) => void
   onSidechatSend: (text: string) => void
   onSidechatStop: () => void

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Icon } from './Icon.tsx'
+import { canAlwaysAllow, type ApprovalChoice } from '../lib/approval.ts'
 import type { ApprovalRequest, QuestionRequest } from '../lib/types.ts'
 
 export interface QuestionAnswer {
@@ -23,7 +24,7 @@ export function normalizeQuestionAnswers(answers: QuestionAnswer[]): QuestionAns
 interface InteractionPanelProps {
   approval?: ApprovalRequest
   question?: QuestionRequest
-  onApproval: (request: ApprovalRequest, outcome: 'allowed-once' | 'rejected') => void
+  onApproval: (request: ApprovalRequest, outcome: ApprovalChoice) => void
   onQuestion: (request: QuestionRequest, answers: QuestionAnswer[]) => void
 }
 
@@ -36,11 +37,16 @@ export function InteractionPanel({ approval, question, onApproval, onQuestion }:
   }, [question])
 
   if (approval !== undefined) {
+    const persistent = canAlwaysAllow(approval)
     return (
       <section className="interaction-panel approval-panel" aria-live="assertive">
         <div className="interaction-icon"><Icon name="lock" size={15} /></div>
         <div className="interaction-copy"><strong>Approval required</strong><span>{approval.reason ?? `Tool ${approval.toolName} requests privileged execution.`}</span><code>{approval.toolName}</code></div>
-        <div className="interaction-actions"><button type="button" onClick={() => onApproval(approval, 'rejected')}>Reject</button><button type="button" className="primary" onClick={() => onApproval(approval, 'allowed-once')}>Allow once</button></div>
+        <div className="interaction-actions">
+          <button type="button" onClick={() => onApproval(approval, 'rejected')}>Reject</button>
+          <button type="button" onClick={() => onApproval(approval, 'allowed-once')}>Allow once</button>
+          {persistent && <button type="button" className="primary" title="Allow matching requests for this session" onClick={() => onApproval(approval, 'allowed-session')}>Always allow</button>}
+        </div>
       </section>
     )
   }

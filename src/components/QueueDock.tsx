@@ -63,7 +63,14 @@ export function QueueDock({ items, running, disabled = false, onAction }: QueueD
                     <>
                       <button type="button" className="queue-action" aria-label="Edit queued message" title={item.text === null ? 'Only text messages can be edited' : undefined} disabled={item.text === null} onClick={() => setEditing({ id: item.id, text: item.text ?? '' })}><Icon name="edit" size={13} /></button>
                       <button type="button" className="queue-action" aria-label="Remove queued message" onClick={() => onAction(item.id, { kind: 'remove' })}><Icon name="trash" size={13} /></button>
-                      <button type="button" className="queue-action" aria-label="Steer queued message" title={running ? undefined : 'Steering is available while the agent is running'} disabled={!running} onClick={() => onAction(item.id, { kind: 'steer' })}><Icon name="send" size={12} /></button>
+                      <button
+                        type="button"
+                        className="queue-action"
+                        aria-label={running ? 'Send queued message now' : 'Start queued message'}
+                        title={running ? 'Send now in the current turn' : item.source === 'codex' ? 'Start this queued Codex message' : 'Steering is available while the agent is running'}
+                        disabled={!running && item.source !== 'codex'}
+                        onClick={() => onAction(item.id, { kind: 'steer' })}
+                      ><Icon name="send" size={12} /></button>
                     </>
                   )}
                 </span>

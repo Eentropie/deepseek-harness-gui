@@ -299,9 +299,9 @@ export const harnessApi = {
     api?: string
     apiKey?: string
   }) => rpc<{ models: DiscoveredModelView[] }>('llm.discoverModels', payload),
-  prompt: (sessionId: string, content: PromptContentPart[]) => rpc<{ accepted: true }>('session.prompt', {
+  prompt: (sessionId: string, content: PromptContentPart[], mode: 'queue' | 'steer' = 'queue') => rpc<{ accepted: true }>('session.prompt', {
     sessionId,
-    mode: 'queue',
+    mode,
     content,
     clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   }),
@@ -311,10 +311,10 @@ export const harnessApi = {
       'session.selectModel',
       { sessionId, provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) },
     ),
-  setPermission: (sessionId: string, preset: string) =>
+  setPermission: (sessionId: string, preset: string, mode: 'queue' | 'steer' = 'queue') =>
     rpc<{ accepted: true }>('session.prompt', {
       sessionId,
-      mode: 'queue',
+      mode,
       content: [{ type: 'text', text: `/permission ${preset}` }],
       clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     }),
@@ -378,13 +378,17 @@ export const codexApi = {
     if (window.dshDesktop === undefined) return Promise.reject(new Error('Codex CLI requires the desktop app'))
     return window.dshDesktop.codexReadThread(threadId)
   },
+  steer: (threadId: string, turnId: string, prompt: string): Promise<import('./types.ts').CodexSteerResult> => {
+    if (window.dshDesktop === undefined) return Promise.reject(new Error('Codex CLI requires the desktop app'))
+    return window.dshDesktop.codexSteer(threadId, turnId, prompt)
+  },
   interrupt: (threadId: string, turnId: string): Promise<void> => {
     if (window.dshDesktop === undefined) return Promise.reject(new Error('Codex CLI requires the desktop app'))
     return window.dshDesktop.codexInterrupt(threadId, turnId)
   },
-  respondApproval: (requestId: string | number, approved: boolean): Promise<void> => {
+  respondApproval: (requestId: string | number, decision: import('./types.ts').CodexApprovalDecision): Promise<void> => {
     if (window.dshDesktop === undefined) return Promise.reject(new Error('Codex CLI requires the desktop app'))
-    return window.dshDesktop.codexRespondApproval(requestId, approved)
+    return window.dshDesktop.codexRespondApproval(requestId, decision)
   },
 }
 

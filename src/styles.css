@@ -1161,6 +1161,7 @@ a:focus-visible {
 
 .interaction-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 5px;
   flex: none;
@@ -2305,6 +2306,92 @@ a:focus-visible {
   color: var(--send-active-ink);
   background: var(--send-active-bg);
 }
+
+.running-composer-actions,
+.delivery-split {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+}
+
+.delivery-split {
+  gap: 0;
+  border-radius: 999px;
+  background: var(--send-active-bg);
+}
+
+.send-button.queue-send {
+  width: 28px;
+  height: 30px;
+  border-radius: 999px 0 0 999px;
+}
+
+.delivery-menu-trigger {
+  width: 22px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-left: 1px solid color-mix(in srgb, var(--send-active-ink) 20%, transparent);
+  border-radius: 0 999px 999px 0;
+  color: var(--send-active-ink);
+  background: transparent;
+}
+
+.delivery-menu-trigger:hover:not(:disabled),
+.send-button.queue-send:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--send-active-bg) 86%, var(--send-idle-bg));
+}
+
+.delivery-menu-trigger:disabled,
+.send-button.queue-send:disabled {
+  opacity: 0.28;
+  cursor: not-allowed;
+}
+
+.delivery-menu {
+  position: absolute;
+  z-index: 12;
+  right: 0;
+  bottom: 37px;
+  width: 220px;
+  padding: 5px;
+  display: grid;
+  gap: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  animation: deepseek-surface-in 150ms var(--motion-settle) both;
+}
+
+.delivery-menu button {
+  min-height: 44px;
+  padding: 7px 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 7px;
+  color: var(--ink-soft);
+  background: transparent;
+  text-align: left;
+}
+
+.delivery-menu button:hover {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+
+.delivery-menu button > span {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 2px;
+}
+
+.delivery-menu strong { font-size: 10px; font-weight: 620; }
+.delivery-menu small { color: var(--muted-2); font-size: 8px; }
 
 .composer-hint {
   margin: 6px 0 0;

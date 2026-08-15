@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Icon } from './Icon.tsx'
 import { ProviderLogo } from './ProviderLogo.tsx'
 import { QueueDock } from './QueueDock.tsx'
@@ -7,7 +7,7 @@ import type { NetworkMode, PendingAttachment, PermissionOption, QueueItem, Sessi
 interface ComposerProps {
   value: string
   onChange: (value: string) => void
-  onSend: () => void
+  onSend: (mode: 'queue' | 'steer') => void
   onStop: () => void
   disabled: boolean
   running: boolean
@@ -62,6 +62,7 @@ export function Composer({
   const composing = useRef(false)
   const fileInput = useRef<HTMLInputElement>(null)
   const textarea = useRef<HTMLTextAreaElement>(null)
+  const [deliveryMenuOpen, setDeliveryMenuOpen] = useState(false)
   const currentModel = models?.groups
     .flatMap(group => group.models.map(model => ({ ...model, provider: group.id })))
     .find(model => model.provider === models.current.provider && model.id === models.current.model)
@@ -71,6 +72,16 @@ export function Composer({
   const canSend = !sendLocked && hasContent
   const assistantName = models?.current.provider === 'codex-cli' ? 'Codex' : 'DeepSeek'
   const webProvider = models?.current.provider === 'codex-cli' ? 'Codex' : 'Host'
+
+  useEffect(() => {
+    if (!running || busy) setDeliveryMenuOpen(false)
+  }, [busy, running])
+
+  const submit = (mode: 'queue' | 'steer'): void => {
+    setDeliveryMenuOpen(false)
+    if (canSend) onSend(mode)
+    else textarea.current?.focus()
+  }
 
   return (
     <div className="composer-seat">
@@ -102,7 +113,8 @@ export function Composer({
             if (event.key !== 'Enter' || event.shiftKey) return
             if (event.nativeEvent.isComposing || composing.current || event.keyCode === 229) return
             event.preventDefault()
-            if (canSend) onSend()
+            if (event.repeat) return
+            if (canSend) onSend(running && (event.metaKey || event.ctrlKey) ? 'steer' : 'queue')
           }}
           placeholder={disabled ? 'Select a session to begin' : `Message ${assistantName}…`}
           disabled={disabled}
@@ -204,16 +216,56 @@ export function Composer({
             </label>
           </div>
           {running ? (
-            <button type="button" className="send-button stop" onClick={onStop} disabled={busy} aria-label="Stop">
-              <Icon name="stop" size={14} />
-            </button>
+            <div className="running-composer-actions">
+              <button type="button" className="send-button stop" onClick={() => { setDeliveryMenuOpen(false); onStop() }} disabled={busy} aria-label="Stop">
+                <Icon name="stop" size={14} />
+              </button>
+              <div
+                className="delivery-split"
+                onBlur={event => {
+                  if (!event.currentTarget.contains(event.relatedTarget)) setDeliveryMenuOpen(false)
+                }}
+              >
+                <button
+                  type="button"
+                  className="send-button queue-send"
+                  onClick={() => submit('queue')}
+                  disabled={!canSend}
+                  aria-label="Queue message"
+                  title="Queue after the current response (Enter)"
+                >
+                  <Icon name="send" size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="delivery-menu-trigger"
+                  disabled={!canSend}
+                  aria-label="Choose message delivery"
+                  aria-expanded={deliveryMenuOpen}
+                  onClick={() => setDeliveryMenuOpen(value => !value)}
+                >
+                  <Icon name="chevron-down" size={11} />
+                </button>
+                {deliveryMenuOpen && (
+                  <div className="delivery-menu" role="menu">
+                    <button type="button" role="menuitem" onClick={() => submit('queue')}>
+                      <span><strong>Queue</strong><small>After the current response · Enter</small></span>
+                      <Icon name="check" size={12} />
+                    </button>
+                    <button type="button" role="menuitem" onClick={() => submit('steer')}>
+                      <span><strong>Send now</strong><small>Guide the current turn · ⌘/Ctrl+Enter</small></span>
+                      <Icon name="send" size={12} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
           ) : (
             <button
               type="button"
               className="send-button"
               onClick={() => {
-                if (canSend) onSend()
-                else textarea.current?.focus()
+                submit('queue')
               }}
               disabled={sendLocked}
               data-empty={!hasContent}
@@ -225,7 +277,9 @@ export function Composer({
           )}
         </div>
       </div>
-      <p className="composer-hint">{hasContent ? 'Enter to send' : 'Type a message to begin'} · Shift + Enter for a new line</p>
+      <p className="composer-hint">{running
+        ? hasContent ? 'Enter to queue · ⌘/Ctrl + Enter to send now' : 'Type a follow-up while the agent works'
+        : hasContent ? 'Enter to send' : 'Type a message to begin'} · Shift + Enter for a new line</p>
     </div>
   )
 }
