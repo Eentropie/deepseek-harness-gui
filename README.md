@@ -1,6 +1,20 @@
 # DeepSeek Harness
 
+<p align="center">
+  <img src="./docs/images/workbench-desktop.png" alt="DeepSeek Harness desktop workbench" width="92%" />
+</p>
+
+<p align="center"><strong>A native macOS and Windows workbench for DeepSeek Harness, Codex, and local coding workflows.</strong></p>
+
+<p align="center">
+  <a href="https://github.com/Eentropie/deepseek-harness-macos-gui/releases/tag/v0.1.2">Download v0.1.2</a> ·
+  <a href="./docs/USAGE.md">Usage guide</a> ·
+  <a href="./docs/USAGE.zh-CN.md">中文使用说明</a>
+</p>
+
 DeepSeek Harness is a standalone macOS and Windows desktop GUI for a local DeepSeek Harness Host. It keeps the upstream Harness repository and its original `http://127.0.0.1:3080` web interface unchanged.
+
+> The screenshots below are real desktop captures. The GUI is a separate client; it does not replace, patch, or embed the Local Host.
 
 ## What is included
 
@@ -18,6 +32,27 @@ DeepSeek Harness is a standalone macOS and Windows desktop GUI for a local DeepS
 - System, light, and dark appearance modes with comfortable or compact density
 
 The visual system uses only black, white, and neutral grays. On macOS, the desktop runtime can read already-installed UI Sans and Serif variable fonts through fixed, read-only font routes. The font files are not copied into this project or the application package. Windows uses Segoe UI Variable and the configured system Serif fallback when those local sources are unavailable.
+
+## Preview
+
+<p align="center">
+  <img src="./docs/images/workbench-desktop-settings-final.png" alt="Settings center with General, Appearance, model, plugin, and Host sections" width="49%" />
+  <img src="./docs/images/workbench-desktop-agent-presets.png" alt="Agent presets with Standard, Code, Minimal, and Creator modes" width="49%" />
+</p>
+
+<p align="center">
+  <img src="./docs/images/workbench-desktop-plugin-manager-bw.png" alt="Plugin manager with searchable enable and disable switches" width="49%" />
+  <img src="./docs/images/workbench-desktop-settings-dark.png" alt="Dark appearance and agent composition settings" width="49%" />
+</p>
+
+## Quick start
+
+1. Download the [latest macOS or Windows release](https://github.com/Eentropie/deepseek-harness-macos-gui/releases/tag/v0.1.2).
+2. Start the existing Harness Host in one Terminal or PowerShell window.
+3. Launch the desktop app and confirm **Settings → Local Host** is connected.
+4. Press `Command-O` on macOS or `Ctrl+O` on Windows to add a work folder, then create a session.
+
+The complete setup, DeepSeek API, Codex, external-provider, permissions, and troubleshooting walkthrough is in [the usage guide](./docs/USAGE.md). 中文用户可直接阅读[中文使用说明](./docs/USAGE.zh-CN.md)。
 
 ## Run it
 
@@ -55,6 +90,14 @@ The same model selector contains two live groups:
 - **ChatGPT · Codex CLI:** models returned by the signed-in Codex account. Every model supplies its own list, such as `Low`, `Medium`, `High`, `X-High`, `Max`, and, where available, `Ultra`.
 
 Changing the model or reasoning effort takes effect on the next turn and does not restart the Host or desktop app. DeepSeek and Codex keep separate native conversation histories under the selected desktop session; switching provider restores the corresponding real thread. Codex turns are limited to the selected Harness work folder with a workspace-write sandbox.
+
+### External agents and provider routes
+
+- **Codex CLI** is the first-class external-agent integration. The GUI starts `codex app-server --listen stdio://` on demand, reads its live model catalog, and keeps Codex authentication in the CLI-owned credential store.
+- **DeepSeek and other LLM providers** are Host provider routes. Configure them through **Settings → Models & credentials**; the GUI never treats an API key as conversation content.
+- **Other agent CLIs** such as Claude Code or OpenCode are not auto-discovered as executable agents in this release. They can be used separately, or connected as model/provider routes when the Host exposes a compatible adapter. Making another agent first-class requires an adapter for the Codex App Server contract or a future desktop bridge.
+
+See [External agents and API setup](./docs/USAGE.md#other-providers-and-external-agents) for executable discovery, Codex login, DeepSeek API keys, OpenAI-compatible gateways, reasoning levels, and permission boundaries.
 
 ## Work folders
 

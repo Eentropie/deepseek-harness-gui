@@ -2,6 +2,8 @@
 
 这是现有 DeepSeek Harness GUI 的 Windows 10/11 x64 桌面版本。它不会修改或替换 Local Host，也不会把 Host 嵌入桌面应用；桌面端继续连接固定地址 `http://127.0.0.1:3080`。
 
+完整的 DeepSeek API、Codex CLI、外部 Agent、权限和故障排查说明见[中文使用说明](./docs/USAGE.zh-CN.md)。
+
 ## 使用当前免安装版
 
 解压：
@@ -51,7 +53,7 @@ Host 与桌面端的配置是分开的：关闭 GUI 不会停止 Host，卸载 G
 
 ```powershell
 codex --version
-codex login
+codex --login
 ```
 
 桌面应用会按以下顺序发现 Codex：
