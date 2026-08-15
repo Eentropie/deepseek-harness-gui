@@ -107,6 +107,46 @@ describe('projectConversation', () => {
     expect(second[0]).toBe(first[0])
     expect(second[1]?.blocks).toEqual([{ kind: 'text', text: 'reply' }])
   })
+
+  it('joins Host web call and result events into a structured source card', () => {
+    const call = entry(2, 'tool/call', { callId: 'web-1', name: 'web_search', arguments: { query: 'DeepSeek Harness' } })
+    const result = entry(3, 'tool/result', {
+      message: {
+        source: { kind: 'tool', callId: 'web-1' },
+        content: [{ type: 'tool-result', toolCallId: 'web-1', content: [{ type: 'text', text: 'Search result text' }], isError: false }],
+      },
+    })
+    result.view = { for: 'result', view: {
+      card: 'web', kind: 'search', title: 'DeepSeek Harness', truncated: false,
+      sources: [{ url: 'https://example.com/harness', title: 'Harness', snippet: 'Current source' }],
+    } }
+    const projected = projectConversation([
+      entry(1, 'assistant/message', {
+        turn: 1, step: 0,
+        message: { content: [{ type: 'tool-call', id: 'web-1', name: 'web_search', arguments: '{"query":"DeepSeek Harness"}' }] },
+      }),
+      call,
+      result,
+      entry(4, 'assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'Found it.' }] } }),
+    ])
+    expect(projected[0]?.blocks[0]).toMatchObject({
+      kind: 'thought',
+      blocks: [{
+        kind: 'tool', callId: 'web-1', status: 'succeeded', result: 'Search result text',
+        view: { card: 'web', kind: 'search', sources: [{ url: 'https://example.com/harness' }] },
+      }],
+    })
+  })
+
+  it('shows cancelled web calls as cancelled rather than failed', () => {
+    const projected = projectConversation([
+      entry(1, 'assistant/message', { turn: 1, step: 0, message: { content: [{ type: 'tool-call', id: 'web-2', name: 'web_fetch', arguments: 'https://example.com' }] } }),
+      entry(2, 'tool/call', { callId: 'web-2', name: 'web_fetch', arguments: { url: 'https://example.com' } }),
+      entry(3, 'tool/result', { callId: 'web-2', content: [{ type: 'text', text: 'AbortError: cancelled' }], isError: true }),
+      entry(4, 'assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'Cancelled.' }] } }),
+    ])
+    expect(projected[0]?.blocks[0]).toMatchObject({ kind: 'thought', blocks: [{ status: 'cancelled' }] })
+  })
 })
 
 describe('live history updates', () => {

@@ -13,6 +13,7 @@ export type IconName =
   | 'edit'
   | 'folder'
   | 'folder-plus'
+  | 'globe'
   | 'key'
   | 'lock'
   | 'moon'
@@ -48,6 +49,7 @@ const drawings: Record<IconName, ReactNode> = {
   edit: <><path d="m4 16.5-.8 3.3 3.3-.8L18.8 6.7a2.3 2.3 0 0 0-3.3-3.3Z" /><path d="m14.5 4.5 3.3 3.3" /></>,
   folder: <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z" />,
   'folder-plus': <><path d="M3 8A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5Z" /><path d="M12 11v5M9.5 13.5h5" /></>,
+  globe: <><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9S14.5 18.3 12 21M12 3C9.5 5.7 8.2 8.7 8.2 12S9.5 18.3 12 21" /></>,
   key: <><circle cx="8" cy="12" r="4" /><path d="m11 9 8-8M15 5l3 3M13 7l3 3" /></>,
   lock: <><rect x="5" y="10" width="14" height="10" rx="2" /><path d="M8.5 10V7.5a3.5 3.5 0 0 1 7 0V10M12 14v2" /></>,
   moon: <path d="M20 15.5A8.4 8.4 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z" />,

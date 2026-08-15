@@ -8,6 +8,8 @@ import type {
 } from '../src/lib/types.ts'
 import { visibleProviderBlocks, visibleProviderText } from '../src/lib/provider-handoff.ts'
 import { composeTurnBlocks } from '../src/lib/thought-process.ts'
+import { codexWebToolBlock } from '../src/lib/web-tools.ts'
+import type { ToolStatus } from '../src/lib/types.ts'
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null ? value as Record<string, unknown> : undefined
@@ -220,9 +222,16 @@ function itemBlocks(item: Record<string, unknown>): MessageBlock[] {
       arguments: JSON.stringify(item['arguments'] ?? {}, null, 2),
     }]
   }
-  if (type === 'webSearch') return [{ kind: 'tool', name: 'Web search', arguments: '' }]
+  if (type === 'webSearch') {
+    const block = codexWebToolBlock(item, 'succeeded')
+    return block === undefined ? [] : [block]
+  }
   if (type === 'imageView') return [{ kind: 'tool', name: 'View image', arguments: string(item['path']) ?? '' }]
   return []
+}
+
+export function projectCodexToolItem(value: unknown, status: ToolStatus, timestamp?: number): Extract<MessageBlock, { kind: 'tool' }> | undefined {
+  return codexWebToolBlock(value, status, timestamp)
 }
 
 /** Project a persisted Codex thread onto the renderer's provider-neutral transcript. */

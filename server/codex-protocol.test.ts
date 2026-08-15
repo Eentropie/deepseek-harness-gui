@@ -72,6 +72,22 @@ describe('Codex App Server protocol projection', () => {
     expect(messages[0]?.blocks).toEqual([{ kind: 'text', text: 'Current request' }])
   })
 
+  it('projects persisted Codex web activity into the shared web card model', () => {
+    const messages = projectCodexThread({ thread: { turns: [{
+      id: 'turn-web', startedAt: 10,
+      items: [
+        { type: 'webSearch', id: 'web-1', query: 'current release', action: { type: 'search', query: 'current release' }, results: [
+          { url: 'https://example.com/release', title: 'Release' },
+        ] },
+        { type: 'agentMessage', id: 'answer', text: 'Current release found.' },
+      ],
+    }] } })
+    expect(messages[0]?.blocks[0]).toMatchObject({ kind: 'thought', blocks: [{
+      kind: 'tool', name: 'web_search', status: 'succeeded',
+      view: { card: 'web', kind: 'search', sources: [{ url: 'https://example.com/release' }] },
+    }] })
+  })
+
   it('projects account quota without exposing the account email', () => {
     const usage = normalizeCodexUsage(
       { account: { type: 'chatgpt', email: 'private@example.com', planType: 'plus' } },

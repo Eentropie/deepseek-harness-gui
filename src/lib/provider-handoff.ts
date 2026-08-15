@@ -1,4 +1,5 @@
 import type { ConversationMessage, MessageBlock, ProviderHandoffMessage } from './types.ts'
+import { isNetworkPolicyText } from './network-mode.ts'
 
 export const PROVIDER_HANDOFF_MARKER = '[[dsh-provider-handoff:v1]]'
 
@@ -67,6 +68,7 @@ export function isProviderHandoffText(value: string): boolean {
 
 /** Hide model-only handoff context while preserving a fallback request's real user text. */
 export function visibleProviderText(value: string): string | undefined {
+  if (isNetworkPolicyText(value)) return undefined
   if (!isProviderHandoffText(value)) return value
   const match = value.match(/<current_user_message>\n([\s\S]*?)\n<\/current_user_message>\s*$/)
   const visible = match?.[1]?.trim()

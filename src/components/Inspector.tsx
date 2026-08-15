@@ -42,6 +42,7 @@ interface InspectorProps {
     models?: SessionModels
     permissionOptions: import('../lib/types.ts').PermissionOption[]
     permission?: string
+    network: import('../lib/types.ts').NetworkMode
     messages: ConversationMessage[]
     running: boolean
     error?: string
@@ -58,6 +59,7 @@ interface InspectorProps {
   onSidechatModel: (provider: string, model: string) => void
   onSidechatEffort: (effort: string) => void
   onSidechatPermission: (permission: string) => void
+  onSidechatNetwork: (network: import('../lib/types.ts').NetworkMode) => void
   onGoalAction: (action: 'create' | 'edit' | 'pause' | 'resume' | 'complete' | 'clear') => void
   onClose: () => void
   onRefresh: () => void
@@ -103,6 +105,7 @@ export function Inspector({
   onSidechatModel,
   onSidechatEffort,
   onSidechatPermission,
+  onSidechatNetwork,
   onGoalAction,
   onClose,
   onRefresh,
@@ -170,6 +173,7 @@ export function Inspector({
           models={sidechat.models}
           permissionOptions={sidechat.permissionOptions}
           permission={sidechat.permission}
+          network={sidechat.network}
           messages={sidechat.messages}
           running={sidechat.running}
           error={sidechat.error}
@@ -180,6 +184,7 @@ export function Inspector({
           onModel={onSidechatModel}
           onEffort={onSidechatEffort}
           onPermission={onSidechatPermission}
+          onNetwork={onSidechatNetwork}
         />
       )}
 

@@ -34,13 +34,13 @@ The reason is structural: the current Host exposes `workspace.archiveSession`, b
 | Domain | Current desktop coverage |
 | --- | --- |
 | Host/workspaces | Host status, native folder selection, create/register workspace, rename, reorder, remove, open in Finder |
-| Sessions | List/search/create, history pagination, rename, latest-turn fork, archive, image attachment, model selection, prompt/cancel, queue edit/remove/steer |
+| Sessions | List/search/create, history pagination, rename, latest-turn fork, archive, image attachment, model selection, prompt/cancel, queue edit/remove/steer, per-session web policy |
 | Interaction | Streaming assistant/reasoning text, approvals, user questions, permission presets |
 | Agent runtime | Goals, direct subagent list/history/follow-up/interrupt, jobs snapshot, skill inventory |
 | Presets | List/read/copy/open/remove, default preset setting, Creator draft flow |
 | Settings | `settings.describe`, `settings.update`, `settings.replace`, `settings.mutate`, document opening, a schema-generated editor, revisions, redaction, and reset controls |
 | Providers and credentials | Host provider roster, live model catalog, endpoint discovery, value-free credential status, write-only set, and confirmed removal |
-| Desktop additions | Codex CLI threads/models, native menus/windows/deep links, local appearance/layout preferences, plugin HMR controls |
+| Desktop additions | Codex CLI threads/models, live web-search mode, structured search/fetch cards, native menus/windows/deep links, local appearance/layout preferences, plugin HMR controls |
 
 ### Host requests not exposed by the desktop bridge
 
@@ -57,7 +57,7 @@ The original Web bundle mounts dedicated client modules for tool calls, Cordis c
 
 Highest-impact gaps are:
 
-1. **Rich in-thread execution records.** Tool arguments/results, file/diff cards, Cordis operations, workflow nodes, produced files, and the timing/trajectory ledger are not rendered as first-class timeline items.
+1. **Rich in-thread execution records beyond web tools.** Search/fetch calls now have status, timing, sources, links, and expandable fetch/error content. File/diff cards, Cordis operations, workflow nodes, produced files, and the timing/trajectory ledger are not yet rendered as first-class timeline items.
 2. **Preset switching for a blank current session.** The RPC exists and is guarded correctly, but the current page only changes the default used by future sessions.
 3. **Command, skill, and context discovery.** There is no full slash-command or `@file`/`@folder`/`@skill` picker, and the inspector truncates the skill roster.
 4. **Session precision controls.** Forking is only offered at the latest completed turn, search does not expose its `hasMore` refinement state, and Plan mode can be exited when active but cannot be entered from the GUI.

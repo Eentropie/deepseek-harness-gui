@@ -9,12 +9,14 @@ import type {
   CodexThreadSnapshot,
   CodexUsageSnapshot,
   ProviderHandoffMessage,
+  EffectiveNetworkMode,
 } from '../src/lib/types.ts'
 import { PROVIDER_HANDOFF_MARKER, providerHandoffText } from '../src/lib/provider-handoff.ts'
 import { codexSpawnEnvironment } from '../server/codex-launch.ts'
 import { codexExecutableCandidates, type CodexExecutableCandidate } from '../server/codex-executable.ts'
 import { codexExecutionPolicy } from '../server/codex-permissions.ts'
-import { normalizeCodexModels, normalizeCodexUsage, projectCodexThread } from '../server/codex-protocol.ts'
+import { normalizeCodexModels, normalizeCodexUsage, projectCodexThread, projectCodexToolItem } from '../server/codex-protocol.ts'
+import { codexWebSearchMode } from '../src/lib/network-mode.ts'
 
 interface PendingRequest {
   resolve: (value: unknown) => void
@@ -30,6 +32,7 @@ interface CodexPromptInput {
   effort: string
   permission: string
   prompt: string
+  network: EffectiveNetworkMode
   context?: ProviderHandoffMessage[]
 }
 
@@ -39,6 +42,10 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 function string(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
+}
+
+function number(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 function requestId(value: unknown): string | number | undefined {
@@ -80,6 +87,7 @@ export class CodexAppServer {
   private nextId = 0
   private readonly pending = new Map<string | number, PendingRequest>()
   private readonly loadedThreads = new Set<string>()
+  private readonly webModeByThread = new Map<string, string>()
   private readonly sessionByThread = new Map<string, string>()
   private readonly incomingApprovals = new Map<string | number, string>()
   private catalogCache?: CodexCatalogModel[]
@@ -134,6 +142,7 @@ export class CodexAppServer {
     }
 
     let threadId = input.threadId
+    const webSearch = codexWebSearchMode(input.network)
     if (threadId === undefined) {
       const started = record(await this.request('thread/start', {
         model: input.model,
@@ -144,13 +153,16 @@ export class CodexAppServer {
         sandbox: policy.threadSandbox,
         serviceName: 'deepseek_workbench',
         developerInstructions: 'Do not ask the user for interactive input. Make safe, reasonable assumptions and continue within the workspace sandbox.',
+        config: { web_search: webSearch },
       }))
       threadId = string(record(started?.['thread'])?.['id'])
       if (threadId === undefined) throw new Error('Codex did not return a thread id')
       this.loadedThreads.add(threadId)
-    } else if (!this.loadedThreads.has(threadId)) {
-      await this.request('thread/resume', { threadId })
+      this.webModeByThread.set(threadId, webSearch)
+    } else if (!this.loadedThreads.has(threadId) || this.webModeByThread.get(threadId) !== webSearch) {
+      await this.request('thread/resume', { threadId, config: { web_search: webSearch } })
       this.loadedThreads.add(threadId)
+      this.webModeByThread.set(threadId, webSearch)
     }
     this.sessionByThread.set(threadId, input.sessionId)
 
@@ -214,6 +226,7 @@ export class CodexAppServer {
     this.stopping = true
     this.startPromise = undefined
     this.loadedThreads.clear()
+    this.webModeByThread.clear()
     for (const requestId of this.incomingApprovals.keys()) this.respond(requestId, { decision: 'decline' })
     this.incomingApprovals.clear()
     this.rejectPending(new Error('Codex App Server stopped'))
@@ -408,6 +421,20 @@ export class CodexAppServer {
     const turn = record(params['turn'])
     const turnId = string(params['turnId']) ?? string(turn?.['id'])
     const sessionId = threadId === undefined ? undefined : this.sessionByThread.get(threadId)
+    if ((method === 'item/started' || method === 'item/completed') && threadId !== undefined && turnId !== undefined) {
+      const timestamp = number(params[method === 'item/started' ? 'startedAtMs' : 'completedAtMs'])
+      const block = projectCodexToolItem(params['item'], method === 'item/started' ? 'running' : 'succeeded', timestamp)
+      if (block !== undefined) {
+        this.publish({
+          type: 'tool-item',
+          ...(sessionId === undefined ? {} : { sessionId }),
+          threadId,
+          turnId,
+          block,
+        })
+      }
+      return
+    }
     if (method === 'turn/started' && threadId !== undefined && turnId !== undefined) {
       this.publish({ type: 'turn-started', ...(sessionId === undefined ? {} : { sessionId }), threadId, turnId })
       return
@@ -458,6 +485,7 @@ export class CodexAppServer {
     this.process = undefined
     this.startPromise = undefined
     this.loadedThreads.clear()
+    this.webModeByThread.clear()
     this.catalogCache = undefined
     this.incomingApprovals.clear()
     this.rejectPending(reason)
@@ -478,6 +506,7 @@ export class CodexAppServer {
     if (!isAbsolute(input.cwd) || input.cwd.includes('\0')) throw new Error('Codex working directory must be an absolute path')
     if (input.model.length === 0 || input.model.length > 160) throw new Error('Codex model id is invalid')
     if (input.effort.length === 0 || input.effort.length > 40) throw new Error('Codex reasoning effort is invalid')
+    if (input.network !== 'off' && input.network !== 'auto') throw new Error('Codex network mode is invalid')
     if (input.prompt.trim() === '' || input.prompt.length > 1_000_000) throw new Error('Codex prompt is invalid')
     if (input.context !== undefined) {
       if (input.context.length > 24) throw new Error('Codex handoff context is too large')

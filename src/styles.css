@@ -1621,6 +1621,114 @@ a:focus-visible {
   background: color-mix(in srgb, var(--main) 55%, var(--surface-soft));
 }
 
+.web-tool-card {
+  margin: 5px 0 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--ink-soft);
+  background: color-mix(in srgb, var(--surface-soft) 84%, var(--main));
+}
+
+.web-tool-card > summary {
+  min-height: 46px;
+  padding: 7px 10px;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto 14px;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.web-tool-card > summary::-webkit-details-marker { display: none; }
+.web-tool-card > summary > svg { color: var(--muted-2); transition: transform 140ms var(--motion-swift); }
+.web-tool-card[open] > summary > svg { transform: rotate(180deg); }
+
+.web-tool-icon {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--ink-soft);
+  background: var(--surface-raised);
+}
+
+.web-tool-summary { min-width: 0; display: grid; gap: 1px; }
+.web-tool-summary strong { font-size: 10.5px; font-weight: 620; }
+.web-tool-summary > span {
+  overflow: hidden;
+  color: var(--muted-2);
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-tool-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted-2);
+  font-size: 8.5px;
+  white-space: nowrap;
+}
+
+.web-tool-status i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.web-tool-card[data-status='running'] .web-tool-status i { animation: web-status-pulse 1.15s ease-in-out infinite; }
+.web-tool-card[data-status='failed'] .web-tool-status,
+.web-tool-card[data-status='cancelled'] .web-tool-status { color: var(--ink-soft); }
+
+@keyframes web-status-pulse {
+  50% { opacity: 0.28; transform: scale(0.72); }
+}
+
+.web-tool-body {
+  padding: 0 10px 10px 44px;
+  border-top: 1px solid var(--border);
+}
+
+.web-tool-answer { padding: 9px 0 2px; color: var(--ink-soft); font-size: 10.5px; }
+.web-source-list { margin: 0; padding: 7px 0 0; display: grid; gap: 3px; list-style: none; }
+.web-source-list li { padding: 6px 0; display: grid; grid-template-columns: 17px minmax(0, 1fr); gap: 6px; }
+.web-source-list li > span {
+  width: 17px;
+  height: 17px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--muted-2);
+  background: var(--surface-raised);
+  font-size: 8px;
+}
+.web-source-list li > div { min-width: 0; display: grid; gap: 1px; }
+.web-source-list a,
+.web-fetch-meta a { overflow: hidden; color: var(--ink-soft); font-size: 10px; font-weight: 590; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
+.web-source-list a:hover,
+.web-fetch-meta a:hover { text-decoration: underline; }
+.web-source-list small { color: var(--muted-2); font-size: 8px; }
+.web-source-list p { margin: 3px 0 0; color: var(--muted); font-size: 9px; line-height: 1.42; }
+.web-tool-empty { margin: 9px 0 0; color: var(--muted-2); font-size: 9px; }
+.web-fetch-meta { padding-top: 9px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.web-fetch-meta code { flex: none; color: var(--muted-2); font-family: var(--font-mono); font-size: 8px; }
+.web-tool-output { margin-top: 8px; color: var(--muted); font-size: 9.5px; }
+.web-tool-output > summary { cursor: pointer; font-weight: 580; }
+.web-tool-output > .markdown { max-height: 220px; margin-top: 7px; padding: 8px; overflow: auto; border-radius: 7px; background: var(--main); }
+.web-tool-truncated { margin-top: 8px; display: inline-block; color: var(--muted-2); font-size: 8px; }
+
+.sidechat-panel .web-tool-card { margin-top: 5px; }
+.sidechat-panel .web-tool-card > summary { min-height: 38px; padding: 5px 6px; grid-template-columns: 22px minmax(0, 1fr) auto 12px; gap: 5px; }
+.sidechat-panel .web-tool-icon { width: 22px; height: 22px; }
+.sidechat-panel .web-tool-status { font-size: 7px; }
+.sidechat-panel .web-tool-body { padding: 0 6px 7px 33px; }
+
 .image-placeholder {
   width: 180px;
   height: 100px;
@@ -2081,6 +2189,11 @@ a:focus-visible {
 .composer-select.model-select select {
   max-width: 145px;
   font-weight: 560;
+}
+
+.composer-select.network-select[data-enabled='true'] > svg:first-child {
+  color: var(--ink-soft);
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--ink) 24%, transparent));
 }
 
 .send-button {

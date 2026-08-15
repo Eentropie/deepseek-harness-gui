@@ -7,9 +7,11 @@ import type {
   MessageBlock,
   ImageMediaType,
   QueueItem,
+  ToolStatus,
 } from './types.ts'
 import { visibleProviderBlocks } from './provider-handoff.ts'
 import { composeTurnBlocks } from './thought-process.ts'
+import { webToolView } from './web-tools.ts'
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null ? value as Record<string, unknown> : undefined
@@ -35,11 +37,12 @@ function blockFromContent(value: unknown): MessageBlock {
   if (type === 'text') return { kind: 'text', text: string(item?.['text']) ?? '' }
   if (type === 'reasoning') return { kind: 'reasoning', text: string(item?.['text']) ?? '' }
   if (type === 'tool-call') {
+    const callId = string(item?.['id']) ?? string(item?.['toolCallId'])
     return {
       kind: 'tool',
       name: string(item?.['name']) ?? 'tool',
-      arguments: string(item?.['arguments']) ?? '',
-      ...(string(item?.['id']) === undefined ? {} : { callId: string(item?.['id']) }),
+      arguments: textValue(item?.['arguments']),
+      ...(callId === undefined ? {} : { callId }),
     }
   }
   if (type === 'image') {
@@ -55,6 +58,40 @@ function blockFromContent(value: unknown): MessageBlock {
     }
   }
   return { kind: 'other', value }
+}
+
+function textValue(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value === undefined) return ''
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function toolResult(value: Record<string, unknown>): { callId?: string; result: string; isError: boolean; errorCode?: string } {
+  const message = record(value['message'])
+  const source = record(message?.['source'])
+  const content = Array.isArray(message?.['content']) ? message['content'] : Array.isArray(value['content']) ? value['content'] : []
+  const toolPart = content.map(record).find(item => item?.['type'] === 'tool-result')
+  const nested = Array.isArray(toolPart?.['content']) ? toolPart?.['content'] : content
+  const result = (nested ?? []).flatMap(item => {
+    const part = record(item)
+    return part?.['type'] === 'text' && typeof part['text'] === 'string' ? [part['text']] : []
+  }).join('\n\n')
+  const error = record(value['error'])
+  return {
+    callId: string(value['callId']) ?? string(source?.['callId']) ?? string(toolPart?.['toolCallId']),
+    result,
+    isError: value['isError'] === true || toolPart?.['isError'] === true || error !== undefined,
+    ...(string(error?.['code']) === undefined ? {} : { errorCode: string(error?.['code']) }),
+  }
+}
+
+function toolStatus(isError: boolean, code: string | undefined, result: string): ToolStatus {
+  if (!isError) return 'succeeded'
+  return /cancel|abort|interrupt/i.test(`${code ?? ''} ${result}`) ? 'cancelled' : 'failed'
 }
 
 function contentBlocks(value: unknown): MessageBlock[] {
@@ -125,6 +162,7 @@ export class ConversationProjector {
   private readonly finalized = new Set<string>()
   private readonly turns = new Map<number, Map<number, AssistantStep>>()
   private readonly turnIndexes = new Map<number, number>()
+  private readonly tools = new Map<string, Extract<MessageBlock, { kind: 'tool' }>>()
   private snapshotCache: ConversationMessage[] = []
   private dirty = true
 
@@ -136,7 +174,7 @@ export class ConversationProjector {
     this.entries = entries
     for (let index = start; index < entries.length; index += 1) {
       const entry = entries[index]
-      if (entry !== undefined) this.ingest(entry.event)
+      if (entry !== undefined) this.ingest(entry)
     }
     return this.snapshot()
   }
@@ -148,11 +186,13 @@ export class ConversationProjector {
     this.finalized.clear()
     this.turns.clear()
     this.turnIndexes.clear()
+    this.tools.clear()
     this.snapshotCache = []
     this.dirty = true
   }
 
-  private ingest(event: DshEvent): void {
+  private ingest(entry: HistoryEntry): void {
+    const { event } = entry
     if (event.type === 'user/message') {
       const source = record(event.data['source'])
       const sourceKind = string(source?.['kind'])
@@ -163,6 +203,44 @@ export class ConversationProjector {
         time: event.time,
         role: 'user',
         blocks: contentBlocks(event.data['content']),
+      })
+      this.dirty = true
+      return
+    }
+
+    if (event.type === 'tool/call') {
+      const callId = string(event.data['callId']) ?? string(event.data['id'])
+      if (callId === undefined) return
+      const name = string(event.data['name']) ?? 'tool'
+      const argumentsText = textValue(event.data['arguments'])
+      this.tools.set(callId, {
+        kind: 'tool',
+        name,
+        arguments: argumentsText,
+        callId,
+        status: 'running',
+        startedAt: event.time,
+        ...(webToolView(entry.view, argumentsText) === undefined ? {} : { view: webToolView(entry.view, argumentsText) }),
+      })
+      this.dirty = true
+      return
+    }
+
+    if (event.type === 'tool/result') {
+      const result = toolResult(event.data)
+      if (result.callId === undefined) return
+      const previous = this.tools.get(result.callId)
+      const view = webToolView(entry.view, previous?.arguments)
+      this.tools.set(result.callId, {
+        kind: 'tool',
+        name: previous?.name ?? 'tool',
+        arguments: previous?.arguments ?? '',
+        callId: result.callId,
+        status: toolStatus(result.isError, result.errorCode, result.result),
+        ...(result.result === '' ? {} : { result: result.result }),
+        ...(previous?.startedAt === undefined ? {} : { startedAt: previous.startedAt }),
+        finishedAt: event.time,
+        ...(view === undefined ? previous?.view === undefined ? {} : { view: previous.view } : { view }),
       })
       this.dirty = true
       return
@@ -245,9 +323,47 @@ export class ConversationProjector {
       if (index === undefined) messages.push(projected)
       else messages[index] = projected
     }
-    this.snapshotCache = messages.sort((left, right) => left.seq - right.seq)
+    const previousById = new Map(this.snapshotCache.map(message => [message.id, message]))
+    const projected = messages
+      .map(message => {
+        const blocks = this.decorateBlocks(message.blocks)
+        return blocks === message.blocks ? message : { ...message, blocks }
+      })
+      .sort((left, right) => left.seq - right.seq)
+    this.snapshotCache = projected.map(message => {
+      const previous = previousById.get(message.id)
+      return previous !== undefined && conversationMessagesEqual(previous, message) ? previous : message
+    })
     this.dirty = false
     return this.snapshotCache
+  }
+
+  private decorateBlocks(blocks: MessageBlock[]): MessageBlock[] {
+    let changed = false
+    const decorated = blocks.map(block => {
+      if (block.kind === 'thought') {
+        const nested = this.decorateProcessBlocks(block.blocks)
+        if (nested === block.blocks) return block
+        changed = true
+        return { ...block, blocks: nested }
+      }
+      if (block.kind !== 'tool' || block.callId === undefined) return block
+      const next = this.tools.get(block.callId) ?? block
+      if (next !== block) changed = true
+      return next
+    })
+    return changed ? decorated : blocks
+  }
+
+  private decorateProcessBlocks(blocks: import('./types.ts').ProcessBlock[]): import('./types.ts').ProcessBlock[] {
+    let changed = false
+    const decorated = blocks.map(block => {
+      if (block.kind !== 'tool' || block.callId === undefined) return block
+      const next = this.tools.get(block.callId) ?? block
+      if (next !== block) changed = true
+      return next
+    })
+    return changed ? decorated : blocks
   }
 }
 
@@ -361,6 +477,9 @@ export function conversationMessagesEqual(left: ConversationMessage, right: Conv
     if (block.kind === 'reasoning') return other.kind === 'reasoning' && block.text === other.text
     if (block.kind === 'tool' && other.kind === 'tool') {
       return block.name === other.name && block.arguments === other.arguments && block.callId === other.callId
+        && block.status === other.status && block.result === other.result
+        && block.startedAt === other.startedAt && block.finishedAt === other.finishedAt
+        && JSON.stringify(block.view) === JSON.stringify(other.view)
     }
     if (block.kind === 'image' && other.kind === 'image') {
       return block.label === other.label && block.attachmentId === other.attachmentId

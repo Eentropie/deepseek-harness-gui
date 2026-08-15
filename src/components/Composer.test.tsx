@@ -18,6 +18,10 @@ function renderComposer(value: string, disabled = false): string {
       onModel={noop}
       onEffort={noop}
       onPermission={noop}
+      networkMode="auto"
+      networkAvailable
+      networkOnline
+      onNetworkMode={noop}
       onExitPlan={noop}
       attachments={[]}
       onAddFiles={noop}
@@ -72,6 +76,10 @@ describe('Composer send control', () => {
         onModel={noop}
         onEffort={noop}
         onPermission={noop}
+        networkMode="auto"
+        networkAvailable
+        networkOnline
+        onNetworkMode={noop}
         onExitPlan={noop}
         attachments={[]}
         onAddFiles={noop}
@@ -81,8 +89,9 @@ describe('Composer send control', () => {
       />,
     )
     const selects = markup.match(/<select[^>]*>/g) ?? []
-    expect(selects).toHaveLength(3)
+    expect(selects).toHaveLength(4)
     expect(selects.every(select => !select.includes('disabled'))).toBe(true)
     expect(markup).toContain('applies from the next model step or turn')
+    expect(markup).toContain('aria-label="Web access"')
   })
 })

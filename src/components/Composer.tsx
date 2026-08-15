@@ -2,7 +2,7 @@ import { useRef } from 'react'
 import { Icon } from './Icon.tsx'
 import { ProviderLogo } from './ProviderLogo.tsx'
 import { QueueDock } from './QueueDock.tsx'
-import type { PendingAttachment, PermissionOption, QueueItem, SessionModels } from '../lib/types.ts'
+import type { NetworkMode, PendingAttachment, PermissionOption, QueueItem, SessionModels } from '../lib/types.ts'
 
 interface ComposerProps {
   value: string
@@ -19,6 +19,10 @@ interface ComposerProps {
   onModel: (provider: string, model: string) => void
   onEffort: (effort: string) => void
   onPermission: (preset: string) => void
+  networkMode: NetworkMode
+  networkAvailable: boolean
+  networkOnline: boolean
+  onNetworkMode: (mode: NetworkMode) => void
   plan?: { active?: boolean; pending?: boolean }
   onExitPlan: () => void
   attachments: PendingAttachment[]
@@ -43,6 +47,10 @@ export function Composer({
   onModel,
   onEffort,
   onPermission,
+  networkMode,
+  networkAvailable,
+  networkOnline,
+  onNetworkMode,
   plan,
   onExitPlan,
   attachments,
@@ -62,6 +70,7 @@ export function Composer({
   const sendLocked = disabled || busy
   const canSend = !sendLocked && hasContent
   const assistantName = models?.current.provider === 'codex-cli' ? 'Codex' : 'DeepSeek'
+  const webProvider = models?.current.provider === 'codex-cli' ? 'Codex' : 'Host'
 
   return (
     <div className="composer-seat">
@@ -171,6 +180,28 @@ export function Composer({
                 <Icon name="chevron-down" size={12} />
               </label>
             )}
+            <label
+              className="composer-select network-select"
+              data-enabled={networkMode !== 'off' && networkAvailable && networkOnline}
+              title={!networkOnline
+                ? `${webProvider} web access is offline`
+                : networkAvailable
+                ? running ? `${webProvider} web access · applies from the next tool boundary or turn` : `${webProvider} web access`
+                : 'The selected DeepSeek preset does not expose web tools'}
+            >
+              <Icon name="globe" size={14} />
+              <select
+                value={networkMode}
+                onChange={event => onNetworkMode(event.target.value as NetworkMode)}
+                disabled={busy}
+                aria-label="Web access"
+              >
+                <option value="off">Web off</option>
+                <option value="auto">Web auto · {networkOnline ? webProvider : 'offline'}</option>
+                <option value="ask">Ask before web</option>
+              </select>
+              <Icon name="chevron-down" size={12} />
+            </label>
           </div>
           {running ? (
             <button type="button" className="send-button stop" onClick={onStop} disabled={busy} aria-label="Stop">

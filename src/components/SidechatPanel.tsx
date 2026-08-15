@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ConversationMessage, MessageBlock, PermissionOption, SessionModels, SidechatThreadSummary } from '../lib/types.ts'
+import type { ConversationMessage, MessageBlock, NetworkMode, PermissionOption, SessionModels, SidechatThreadSummary } from '../lib/types.ts'
 import { Markdown } from './Markdown.tsx'
 import { Icon } from './Icon.tsx'
 import { ProviderLogo } from './ProviderLogo.tsx'
+import { ToolCard } from './ToolCard.tsx'
 
 interface SidechatPanelProps {
   owner?: string
@@ -13,6 +14,7 @@ interface SidechatPanelProps {
   models?: SessionModels
   permissionOptions: PermissionOption[]
   permission?: string
+  network: NetworkMode
   messages: ConversationMessage[]
   running: boolean
   error?: string
@@ -23,6 +25,7 @@ interface SidechatPanelProps {
   onModel: (provider: string, model: string) => void
   onEffort: (effort: string) => void
   onPermission: (permission: string) => void
+  onNetwork: (network: NetworkMode) => void
 }
 
 function draftKey(owner?: string): string {
@@ -33,12 +36,12 @@ function SidechatBlock({ block }: { block: MessageBlock }) {
   if (block.kind === 'text') return <Markdown>{block.text}</Markdown>
   if (block.kind === 'reasoning') return <details className="sidechat-thought"><summary>Thought process</summary><Markdown>{block.text}</Markdown></details>
   if (block.kind === 'thought') return <details className="sidechat-thought"><summary>Thought process</summary><div>{block.blocks.map((nested, index) => <SidechatBlock block={nested} key={index} />)}</div></details>
-  if (block.kind === 'tool') return <div className="sidechat-tool"><Icon name="terminal" size={12} /><span>{block.name}</span>{block.arguments !== '' && <code>{block.arguments}</code>}</div>
+  if (block.kind === 'tool') return <ToolCard block={block} compact />
   if (block.kind === 'image') return <div className="sidechat-tool"><span>{block.label}</span></div>
   return null
 }
 
-export function SidechatPanel({ owner, parentTitle, threads, activeThreadId, provider, models, permissionOptions, permission, messages, running, error, onSend, onStop, onNewThread, onThread, onModel, onEffort, onPermission }: SidechatPanelProps) {
+export function SidechatPanel({ owner, parentTitle, threads, activeThreadId, provider, models, permissionOptions, permission, network, messages, running, error, onSend, onStop, onNewThread, onThread, onModel, onEffort, onPermission, onNetwork }: SidechatPanelProps) {
   const [draft, setDraft] = useState(() => localStorage.getItem(draftKey(owner)) ?? '')
   const scroll = useRef<HTMLDivElement>(null)
   const textarea = useRef<HTMLTextAreaElement>(null)
@@ -81,6 +84,7 @@ export function SidechatPanel({ owner, parentTitle, threads, activeThreadId, pro
         </select></label>
         {efforts.length > 0 && <label title="Reasoning effort"><Icon name="sparkles" size={12} /><select value={models?.current.reasoningEffort ?? currentModel?.reasoning?.defaultEffort ?? ''} onChange={event => onEffort(event.target.value)}>{efforts.map(effort => <option value={effort.id} key={effort.id}>{effort.name}</option>)}</select></label>}
         {permissionOptions.length > 0 && <label title="Permission"><Icon name="lock" size={12} /><select value={permission ?? ''} onChange={event => onPermission(event.target.value)}>{permissionOptions.map(option => <option value={option.value} key={option.value}>{option.name}</option>)}</select></label>}
+        <label title={`${models?.current.provider === 'codex-cli' ? 'Codex' : 'Host'} web access`}><Icon name="globe" size={12} /><select value={network} onChange={event => onNetwork(event.target.value as NetworkMode)}><option value="off">Web off</option><option value="auto">Web auto · {models?.current.provider === 'codex-cli' ? 'Codex' : 'Host'}</option><option value="ask">Ask before web</option></select></label>
       </div>
       <div className="sidechat-messages" ref={scroll}>
         {messages.length === 0 && (

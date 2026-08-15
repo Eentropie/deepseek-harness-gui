@@ -5,6 +5,7 @@ import { ProviderLogo } from './ProviderLogo.tsx'
 import { WhaleLogo } from './WhaleLogo.tsx'
 import { conversationMessagesEqual } from '../lib/history.ts'
 import type { ConversationMessage, MessageBlock, ProcessBlock } from '../lib/types.ts'
+import { ToolCard } from './ToolCard.tsx'
 
 interface ConversationProps {
   messages: ConversationMessage[]
@@ -139,16 +140,7 @@ function RenderBlock({ block, active = false }: { block: MessageBlock; active?: 
         </ThoughtDetails>
       )
     case 'tool':
-      return (
-        <div className="tool-block">
-          <div className="tool-heading">
-            <Icon name="terminal" size={14} />
-            <span>{block.name || 'Tool call'}</span>
-            {block.callId !== undefined && <code>{block.callId.slice(0, 8)}</code>}
-          </div>
-          {block.arguments !== '' && <pre>{block.arguments}</pre>}
-        </div>
-      )
+      return <ToolCard block={block} />
     case 'image':
       return block.src === undefined
         ? <div className="image-placeholder">{block.label}</div>

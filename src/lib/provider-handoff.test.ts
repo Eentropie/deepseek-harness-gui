@@ -7,6 +7,7 @@ import {
   providerHandoffText,
   visibleProviderText,
 } from './provider-handoff.ts'
+import { deepSeekNetworkPolicy } from './network-mode.ts'
 
 function message(seq: number, role: 'user' | 'assistant', text: string, time = seq): ConversationMessage {
   return { id: String(seq), seq, time, role, blocks: [{ kind: 'text', text }] }
@@ -54,5 +55,10 @@ describe('provider handoff', () => {
       ['codex:1', undefined],
       ['codex:2', 'Codex'],
     ])
+  })
+
+  it('keeps renderer-only network policy messages out of visible chat', () => {
+    expect(visibleProviderText(deepSeekNetworkPolicy('auto'))).toBeUndefined()
+    expect(visibleProviderText(deepSeekNetworkPolicy('off'))).toBeUndefined()
   })
 })

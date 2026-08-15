@@ -24,6 +24,7 @@ DeepSeek Harness is a standalone macOS and Windows desktop GUI for a local DeepS
 - Native operating-system folder picker
 - Command palette and keyboard shortcuts
 - Model, reasoning-effort, and permission controls
+- Per-session Off / Auto / Ask web access, with source cards for search and page fetches
 - DeepSeek plus account-scoped ChatGPT/Codex models through the local Codex CLI login
 - Native Harness Agent presets with Standard, Code, Minimal, and Creator modes
 - Session context and activity inspector
@@ -94,6 +95,8 @@ The same model selector contains two live groups:
 - **ChatGPT · Codex CLI:** models returned by the signed-in Codex account. Every model supplies its own list, such as `Low`, `Medium`, `High`, `X-High`, `Max`, and, where available, `Ultra`.
 
 Changing the model or reasoning effort takes effect on the next turn and does not restart the Host or desktop app. DeepSeek and Codex keep separate native conversation histories under the selected desktop session; switching provider restores the corresponding real thread. Codex turns are limited to the selected Harness work folder with a workspace-write sandbox.
+
+Web access is also hot-swappable per session and per sidechat. **Codex** maps the control to the CLI's live web-search configuration before the next turn. **DeepSeek** uses the `web_search` / `web_fetch` tools already exposed by the selected Harness preset; Minimal mode does not expose them. Search sources and fetched pages appear as expandable cards inside Thought process, and **Ask before web** requests permission for each turn. On DeepSeek, Off/Auto is a model-facing turn policy because the current Host has no session-scoped tool-mutation RPC; hard enforcement still belongs in the selected preset or trusted tool runtime. The desktop does not patch or globally toggle the Local Host's plugin composition.
 
 ### External agents and provider routes
 

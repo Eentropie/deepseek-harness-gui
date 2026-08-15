@@ -48,6 +48,7 @@ interface DeepSeekDesktopBridge {
     model: string
     effort: string
     permission: string
+    network: import('./lib/types.ts').EffectiveNetworkMode
     prompt: string
     context?: import('./lib/types.ts').ProviderHandoffMessage[]
   }) => Promise<CodexPromptResult>

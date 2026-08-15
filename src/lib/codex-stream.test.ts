@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyCodexDeltas, type CodexDeltaEvent } from './codex-stream.ts'
+import { applyCodexDeltas, applyCodexToolEvent, type CodexDeltaEvent } from './codex-stream.ts'
 import type { ConversationMessage } from './types.ts'
 
 function delta(text: string): CodexDeltaEvent {
@@ -40,5 +40,23 @@ describe('applyCodexDeltas', () => {
     }
     const messages = applyCodexDeltas([settled], [delta('reply')])
     expect(messages[0]).toBe(settled)
+  })
+})
+
+describe('applyCodexToolEvent', () => {
+  it('keeps a live web item in thought process and settles it in place', () => {
+    const started = applyCodexToolEvent([], {
+      type: 'tool-item', threadId: 'thread', turnId: 'turn',
+      block: { kind: 'tool', name: 'web_search', arguments: 'query', callId: 'web', status: 'running', startedAt: 100,
+        view: { card: 'web', kind: 'search', query: 'query', sources: [], truncated: false } },
+    }, 100)
+    const completed = applyCodexToolEvent(started, {
+      type: 'tool-item', threadId: 'thread', turnId: 'turn',
+      block: { kind: 'tool', name: 'web_search', arguments: 'query', callId: 'web', status: 'succeeded', finishedAt: 250,
+        view: { card: 'web', kind: 'search', query: 'query', sources: [{ url: 'https://example.com' }], truncated: false } },
+    }, 250)
+    expect(completed[0]?.blocks).toEqual([{ kind: 'thought', blocks: [expect.objectContaining({
+      callId: 'web', status: 'succeeded', startedAt: 100, finishedAt: 250,
+    })] }])
   })
 })

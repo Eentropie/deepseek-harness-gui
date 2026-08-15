@@ -18,7 +18,7 @@ import {
 import { Sidebar } from './components/Sidebar.tsx'
 import { TerminalDock } from './components/TerminalDock.tsx'
 import { codexApi, harnessApi, subscribeCodex, subscribeDownlinks } from './lib/api.ts'
-import { applyCodexDeltas, type CodexDeltaEvent } from './lib/codex-stream.ts'
+import { applyCodexDeltas, applyCodexToolEvent, type CodexDeltaEvent } from './lib/codex-stream.ts'
 import {
   appendLiveHistory,
   applyLiveProjection,
@@ -43,6 +43,7 @@ import {
   type PendingTurnTransition,
 } from './lib/pending-turn.ts'
 import { permissionOverrideForNewSession } from './lib/session-permission.ts'
+import { deepSeekNetworkPolicy, isNetworkMode } from './lib/network-mode.ts'
 import { TrailingTask } from './lib/trailing-task.ts'
 import { platformBasename as basename, shortcutLabel } from './lib/platform.ts'
 import type {
@@ -72,6 +73,8 @@ import type {
   SubagentCatalog,
   SubagentEntry,
   WorkspaceSummary,
+  NetworkMode,
+  EffectiveNetworkMode,
 } from './lib/types.ts'
 
 type ConnectionState = 'connecting' | 'connected' | 'reconnecting'
@@ -99,6 +102,7 @@ const SIDECHAT_THREADS_STORAGE_KEY = 'dsh-workbench-sidechat-threads-v1'
 const SIDECHAT_ACTIVE_STORAGE_KEY = 'dsh-workbench-sidechat-active-v1'
 const TERMINAL_OPEN_STORAGE_KEY = 'dsh-workbench-terminal-open'
 const ONBOARDING_STORAGE_KEY = 'dsh-workbench-onboarding-v1'
+const NETWORK_MODES_STORAGE_KEY = 'dsh-workbench-network-modes-v1'
 const STARTUP_GREETING = (() => {
   const greeting = chooseGreeting(new Date(), localStorage.getItem(GREETING_STORAGE_KEY) ?? undefined)
   localStorage.setItem(GREETING_STORAGE_KEY, greeting)
@@ -127,6 +131,7 @@ interface SidechatSelection {
   model: string
   effort?: string
   permission: string
+  network: NetworkMode
 }
 
 const DEFAULT_SIDECHAT_THREAD: SidechatThreadSummary = { id: 'main', title: 'Sidechat 1' }
@@ -179,6 +184,7 @@ function readSidechatSelection(sessionId: string): SidechatSelection | undefined
       model: record['model'],
       ...(typeof record['effort'] === 'string' ? { effort: record['effort'] } : {}),
       permission: record['permission'],
+      network: isNetworkMode(record['network']) ? record['network'] : 'auto',
     }
   } catch {
     return undefined
@@ -265,6 +271,22 @@ function storedStringMap(key: string): Record<string, string> {
   }
 }
 
+function storedNetworkModes(): Record<string, NetworkMode> {
+  try {
+    const value = JSON.parse(localStorage.getItem(NETWORK_MODES_STORAGE_KEY) ?? '{}') as unknown
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+      .filter((entry): entry is [string, NetworkMode] => isNetworkMode(entry[1])))
+  } catch {
+    return {}
+  }
+}
+
+function effectiveNetworkMode(mode: NetworkMode): EffectiveNetworkMode {
+  if (mode !== 'ask') return mode
+  return window.confirm('Allow web search and page fetching for this turn?') ? 'auto' : 'off'
+}
+
 function wait(milliseconds: number): Promise<void> {
   return new Promise(resolve => window.setTimeout(resolve, milliseconds))
 }
@@ -321,6 +343,7 @@ export function App() {
   const [pendingTurns, setPendingTurns] = useState<Record<string, PendingTurnTransition>>({})
   const [pendingHostPermission, setPendingHostPermission] = useState(DEFAULT_HOST_PERMISSION)
   const [drafts, setDrafts] = useState<Record<string, string>>(storedDrafts)
+  const [networkModes, setNetworkModes] = useState<Record<string, NetworkMode>>(storedNetworkModes)
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const [queueBySession, setQueueBySession] = useState<Record<string, QueueItem[]>>({})
   const [jobsBySession, setJobsBySession] = useState<Record<string, JobView[]>>({})
@@ -475,6 +498,8 @@ export function App() {
     [messages, retainedCodexMessages, retainedDeepSeekMessages, subagentView],
   )
   const conversationOwner = subagentView?.childSessionId ?? selectedId ?? pendingSession?.key ?? draftKey
+  const networkOwner = selectedId ?? pendingSession?.key
+  const networkMode = networkOwner === undefined ? 'auto' : networkModes[networkOwner] ?? 'auto'
   const pendingTurn = pendingTurns[conversationOwner]
   const smoothMessages = useMemo(() => pendingTurn === undefined
     ? unifiedMessages
@@ -662,6 +687,7 @@ export function App() {
         model: stored.model,
         ...(effort === undefined ? {} : { effort }),
         permission,
+        network: stored.network,
       }
       writeSidechatSelection(sidechatOwner, next)
       setSidechatSelection(next)
@@ -673,10 +699,11 @@ export function App() {
       model: current.model,
       ...(current.reasoningEffort === undefined ? {} : { effort: current.reasoningEffort }),
       permission: current.provider === CODEX_PROVIDER ? codexPermission : presentedPermission ?? DEFAULT_HOST_PERMISSION,
+      network: networkMode,
     }
     writeSidechatSelection(sidechatOwner, next)
     setSidechatSelection(next)
-  }, [activeSidechatId, codexPermission, permissions?.options, presentedModels, presentedPermission, selectedId, sidechatOwner])
+  }, [activeSidechatId, codexPermission, networkMode, permissions?.options, presentedModels, presentedPermission, selectedId, sidechatOwner])
 
   useEffect(() => {
     if (pendingApprovals.length + pendingQuestions.length > 0) setInspectorOpen(true)
@@ -692,6 +719,10 @@ export function App() {
     }, 320)
     return () => window.clearTimeout(timer)
   }, [drafts])
+
+  useEffect(() => {
+    localStorage.setItem(NETWORK_MODES_STORAGE_KEY, JSON.stringify(Object.fromEntries(Object.entries(networkModes).slice(-120))))
+  }, [networkModes])
 
   useEffect(() => {
     void refreshCodexCatalog(true)
@@ -813,6 +844,10 @@ export function App() {
         setSidechatMessages(current => applyCodexDeltas(current, [event]))
         return
       }
+      if (event.type === 'tool-item') {
+        setSidechatMessages(current => applyCodexToolEvent(current, event))
+        return
+      }
       if (event.type === 'turn-completed') {
         setSidechatTurnId(undefined)
         if (event.status === 'failed') setSidechatError(event.error ?? 'Codex sidechat failed')
@@ -841,6 +876,10 @@ export function App() {
     }
     if (event.type === 'assistant-delta' || event.type === 'reasoning-delta') {
       queueCodexDelta(event)
+      return
+    }
+    if (event.type === 'tool-item') {
+      setCodexMessages(current => applyCodexToolEvent(current, event))
       return
     }
     if (event.type === 'turn-completed') {
@@ -1253,6 +1292,11 @@ export function App() {
         const { [pendingSession.key]: _pendingDraft, ...rest } = current
         return text === undefined ? rest : { ...rest, [result.sessionId]: text }
       })
+      setNetworkModes(current => {
+        const mode = current[pendingSession.key]
+        const { [pendingSession.key]: _pendingMode, ...rest } = current
+        return mode === undefined ? rest : { ...rest, [result.sessionId]: mode }
+      })
       const pendingCodex = readCodexSession(pendingSession.key)
       writeCodexSession(result.sessionId, pendingCodex)
       localStorage.removeItem(codexSessionKey(pendingSession.key))
@@ -1421,6 +1465,7 @@ export function App() {
       ...(effort === undefined ? {} : { effort }),
       permission: previousPermission
         ?? (provider === CODEX_PROVIDER ? DEFAULT_CODEX_PERMISSION : presentedPermission ?? DEFAULT_HOST_PERMISSION),
+      network: sidechatSelection?.network ?? networkMode,
     }
     writeSidechatSelection(sidechatOwner, next)
     setSidechatSelection(next)
@@ -1444,8 +1489,16 @@ export function App() {
     setSidechatSelection(next)
   }
 
+  const handleSidechatNetwork = (network: NetworkMode): void => {
+    if (sidechatOwner === undefined || sidechatSelection === undefined || !isNetworkMode(network)) return
+    const next = { ...sidechatSelection, network }
+    writeSidechatSelection(sidechatOwner, next)
+    setSidechatSelection(next)
+  }
+
   const handleSidechatSend = async (text: string): Promise<void> => {
     if (selectedId === undefined || sidechatOwner === undefined || sidechatRunning || sidechatSelection === undefined) return
+    const networkForTurn = effectiveNetworkMode(sidechatSelection.network)
     const generation = ++sidechatGeneration.current
     const optimistic: ConversationMessage = {
       id: `sidechat-user-${Date.now()}`,
@@ -1472,6 +1525,7 @@ export function App() {
           model: sidechatSelection.model,
           effort: sidechatSelection.effort,
           permission: sidechatSelection.permission,
+          network: networkForTurn,
           prompt: text,
           ...(state.threadId === undefined ? { context: handoff.messages } : {}),
         })
@@ -1506,6 +1560,7 @@ export function App() {
       if (sidechatSelection.permission !== DEFAULT_HOST_PERMISSION) await harnessApi.setPermission(hostSessionId, sidechatSelection.permission)
       const baselineAssistantCount = sidechatMessages.filter(message => message.role === 'assistant').length
       const content: PromptContentPart[] = [
+        { type: 'text', text: deepSeekNetworkPolicy(networkForTurn) },
         ...(created && handoff.messages.length > 0
           ? [{ type: 'text' as const, text: providerHandoffText(codexActive ? 'Codex' : 'DeepSeek', handoff) }]
           : []),
@@ -1565,6 +1620,7 @@ export function App() {
   const handleSend = async (): Promise<void> => {
     const prompt = draft.trim()
     if ((prompt === '' && attachments.length === 0) || busy) return
+    const networkForTurn = effectiveNetworkMode(networkMode)
     const tailBeforeSend = historyRef.current.events.at(-1)?.event.seq
     const sourceDraftKey = draftKey
     const sourceOwner = subagentView?.childSessionId ?? selectedId ?? sourceDraftKey
@@ -1625,6 +1681,7 @@ export function App() {
           model: current.model,
           effort: current.reasoningEffort ?? 'medium',
           permission: codexPermission,
+          network: networkForTurn,
           prompt,
           context: handoff.messages,
         })
@@ -1661,6 +1718,7 @@ export function App() {
       } else {
         const handoff = collectProviderHandoff(retainedCodexMessages, codexSession.deepSeekImportedCodexSeq ?? 0)
         const content: PromptContentPart[] = [
+          { type: 'text', text: deepSeekNetworkPolicy(networkForTurn) },
           ...(handoff.messages.length === 0
             ? []
             : [{ type: 'text' as const, text: providerHandoffText('Codex', handoff) }]),
@@ -1851,6 +1909,12 @@ export function App() {
     } finally {
       setBusy(false)
     }
+  }
+
+  const handleNetworkMode = (mode: NetworkMode): void => {
+    if (networkOwner === undefined || !isNetworkMode(mode) || subagentView !== undefined) return
+    setNetworkModes(current => ({ ...current, [networkOwner]: mode }))
+    setActionError(undefined)
   }
 
   const handleExitPlan = async (): Promise<void> => {
@@ -2482,6 +2546,10 @@ export function App() {
           onModel={(provider, model) => { void handleModel(provider, model) }}
           onEffort={effort => { void handleEffort(effort) }}
           onPermission={preset => { void handlePermission(preset) }}
+          networkMode={networkMode}
+          networkAvailable={codexActive || (pendingSession?.agentPreset ?? selected?.agentPreset) !== 'minimal'}
+          networkOnline={codexActive ? codexCatalog.available : !offline}
+          onNetworkMode={handleNetworkMode}
           plan={codexActive ? undefined : projectionValues?.plan}
           onExitPlan={() => { void handleExitPlan() }}
           attachments={attachments}
@@ -2520,6 +2588,7 @@ export function App() {
             models: sidechatModels,
             permissionOptions: sidechatPermissionOptions,
             permission: sidechatSelection?.permission,
+            network: sidechatSelection?.network ?? networkMode,
             messages: sidechatMessages,
             running: sidechatRunning,
             error: sidechatError,
@@ -2536,6 +2605,7 @@ export function App() {
           onSidechatModel={handleSidechatModel}
           onSidechatEffort={handleSidechatEffort}
           onSidechatPermission={handleSidechatPermission}
+          onSidechatNetwork={handleSidechatNetwork}
           onGoalAction={action => { void handleGoalAction(action) }}
           onClose={() => setInspectorOpen(false)}
           onRefresh={() => {

@@ -692,6 +692,11 @@ function installIpc(
       model: requiredString(payload['model'], 'model'),
       effort: requiredString(payload['effort'], 'effort'),
       permission: requiredString(payload['permission'], 'permission'),
+      network: (() => {
+        const value = requiredString(payload['network'], 'network')
+        if (value !== 'off' && value !== 'auto') throw new Error('network must be off or auto')
+        return value
+      })(),
       prompt: requiredString(payload['prompt'], 'prompt'),
       ...(payload['context'] === undefined ? {} : { context: optionalHandoffMessages(payload['context']) }),
     })

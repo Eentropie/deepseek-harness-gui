@@ -367,6 +367,7 @@ export const codexApi = {
     model: string
     effort: string
     permission: string
+    network: import('./types.ts').EffectiveNetworkMode
     prompt: string
     context?: import('./types.ts').ProviderHandoffMessage[]
   }): Promise<CodexPromptResult> => {

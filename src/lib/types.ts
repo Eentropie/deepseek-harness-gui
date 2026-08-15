@@ -334,10 +334,48 @@ export interface SessionModels {
   failures: Array<{ id: string; name: string; message: string }>
 }
 
+export type ToolStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
+
+export interface WebSource {
+  url: string
+  title?: string
+  snippet?: string
+  publishedAt?: string
+}
+
+export type WebToolView =
+  | {
+    card: 'web'
+    kind: 'search'
+    title?: string
+    query?: string
+    sources: WebSource[]
+    answer?: string
+    truncated: boolean
+  }
+  | {
+    card: 'web'
+    kind: 'fetch'
+    title?: string
+    url?: string
+    statusCode?: number
+    truncated: boolean
+  }
+
 export type ProcessBlock =
   | { kind: 'text'; text: string }
   | { kind: 'reasoning'; text: string }
-  | { kind: 'tool'; name: string; arguments: string; callId?: string }
+  | {
+    kind: 'tool'
+    name: string
+    arguments: string
+    callId?: string
+    status?: ToolStatus
+    result?: string
+    startedAt?: number
+    finishedAt?: number
+    view?: WebToolView
+  }
   | { kind: 'image'; label: string; attachmentId?: string; mediaType?: ImageMediaType; src?: string; name?: string }
   | { kind: 'other'; value: unknown }
 
@@ -388,6 +426,9 @@ export interface ProviderHandoffMessage {
 }
 
 export type CodexPermissionMode = 'ask-for-approval' | 'approve-for-me' | 'full-access'
+
+export type NetworkMode = 'off' | 'auto' | 'ask'
+export type EffectiveNetworkMode = Exclude<NetworkMode, 'ask'>
 
 export interface CodexThreadSnapshot {
   threadId: string
@@ -482,6 +523,13 @@ export type CodexEvent =
     turnId: string
     itemId: string
     delta: string
+  }
+  | {
+    type: 'tool-item'
+    sessionId?: string
+    threadId: string
+    turnId: string
+    block: Extract<ProcessBlock, { kind: 'tool' }>
   }
   | {
     type: 'turn-completed'
