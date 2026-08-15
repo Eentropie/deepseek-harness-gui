@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Icon, type IconName } from './Icon.tsx'
+import { ProviderLogo } from './ProviderLogo.tsx'
 import { WhaleLogo } from './WhaleLogo.tsx'
 import { desktopArchitecture, desktopPlatform, platformDisplayName, shortcutLabel } from '../lib/platform.ts'
 import { AgentPresetsSettings } from './AgentPresetsSettings.tsx'
@@ -284,7 +285,7 @@ export function SettingsPanel({
                 ) : (
                   <div className="settings-card">
                     <Row title="Model" detail="Provider and model used by the current session.">
-                      <label className="settings-select"><select value={`${models.current.provider}::${models.current.model}`} disabled={busy} onChange={event => {
+                      <label className="settings-select settings-select-provider"><ProviderLogo provider={models.current.provider} name={currentModel?.name} size={15} /><select value={`${models.current.provider}::${models.current.model}`} disabled={busy} onChange={event => {
                         const [provider = '', model = ''] = event.target.value.split('::')
                         onModel(provider, model)
                       }}>

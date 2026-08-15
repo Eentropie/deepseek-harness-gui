@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ConversationMessage, MessageBlock, PermissionOption, SessionModels, SidechatThreadSummary } from '../lib/types.ts'
 import { Markdown } from './Markdown.tsx'
 import { Icon } from './Icon.tsx'
+import { ProviderLogo } from './ProviderLogo.tsx'
 
 interface SidechatPanelProps {
   owner?: string
@@ -72,7 +73,7 @@ export function SidechatPanel({ owner, parentTitle, threads, activeThreadId, pro
       </div>
       <div className="sidechat-status"><span><i data-running={running} />{provider}</span><small>{parentTitle === undefined ? 'Open a main chat to begin' : `Following ${parentTitle}`}</small></div>
       <div className="sidechat-controls">
-        <label title="Sidechat model"><Icon name="brain" size={12} /><select value={models === undefined ? '' : `${models.current.provider}\u0000${models.current.model}`} disabled={models === undefined || owner === undefined} onChange={event => {
+        <label title="Sidechat model"><ProviderLogo provider={models?.current.provider} name={currentModel?.name} size={13} /><select value={models === undefined ? '' : `${models.current.provider}\u0000${models.current.model}`} disabled={models === undefined || owner === undefined} onChange={event => {
           const [nextProvider, nextModel] = event.target.value.split('\u0000')
           if (nextProvider !== undefined && nextModel !== undefined) onModel(nextProvider, nextModel)
         }}>
@@ -87,7 +88,7 @@ export function SidechatPanel({ owner, parentTitle, threads, activeThreadId, pro
         )}
         {messages.map(message => (
           <article className="sidechat-message" data-role={message.role} key={message.id}>
-            <header>{message.role === 'user' ? 'You' : message.agent ?? provider}</header>
+            <header>{message.role === 'assistant' && <ProviderLogo provider={message.agent ?? provider} size={12} />}{message.role === 'user' ? 'You' : message.agent ?? provider}</header>
             {message.blocks.map((block, index) => <SidechatBlock block={block} key={`${message.id}-${index}`} />)}
           </article>
         ))}

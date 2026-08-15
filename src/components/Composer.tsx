@@ -1,5 +1,6 @@
 import { useRef } from 'react'
 import { Icon } from './Icon.tsx'
+import { ProviderLogo } from './ProviderLogo.tsx'
 import { QueueDock } from './QueueDock.tsx'
 import type { PendingAttachment, PermissionOption, QueueItem, SessionModels } from '../lib/types.ts'
 
@@ -122,6 +123,7 @@ export function Composer({
             </button>
             {models !== undefined && (
               <label className="composer-select model-select" title={running ? 'Model · applies from the next model step or turn' : 'Model'}>
+                <ProviderLogo provider={models.current.provider} name={currentModel?.name} size={14} />
                 <select
                   value={`${models.current.provider}::${models.current.model}`}
                   onChange={event => {

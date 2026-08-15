@@ -1,6 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Icon } from './Icon.tsx'
 import { Markdown } from './Markdown.tsx'
+import { ProviderLogo } from './ProviderLogo.tsx'
 import { WhaleLogo } from './WhaleLogo.tsx'
 import { conversationMessagesEqual } from '../lib/history.ts'
 import type { ConversationMessage, MessageBlock, ProcessBlock } from '../lib/types.ts'
@@ -163,7 +164,7 @@ const Message = memo(function Message({ message, turnRunning }: { message: Conve
   return (
     <article className="message" data-role={message.role} data-streaming={thoughtActive}>
       {message.role === 'assistant' && (
-        <div className="assistant-avatar"><WhaleLogo size={19} /></div>
+        <div className="assistant-avatar"><ProviderLogo provider={message.agent ?? 'DeepSeek'} size={19} /></div>
       )}
       <div className="message-column">
         <div className="message-meta">

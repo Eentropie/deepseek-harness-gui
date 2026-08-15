@@ -25,7 +25,7 @@ DeepSeek Harness.app / DeepSeek Harness.exe
 - **macOS Apple Silicon：** 下载 `DeepSeek-Harness-0.2.0-arm64.dmg` 或 `.zip`，打开 `DeepSeek Harness.app`。未签名包首次可能需要右键/Control-click → **Open**。
 - **Windows x64：** 下载并运行 `DeepSeek-Harness-0.2.0-Windows-x64.exe`。NSIS 安装器支持选择目录、桌面快捷方式和开始菜单项；未签名包可能触发 Windows SmartScreen。
 
-首次打开会出现配置向导：检查 Node.js、发现已有 Harness checkout 或 npm 安装、启动 Local Host、单向写入 DeepSeek API Key、检测 Codex CLI/登录、选择首个工作文件夹，并执行最终环境检查。
+首次打开会出现配置向导：检查 Node.js、发现已有 Harness checkout 或 npm 安装、启动 Local Host、为 DeepSeek 或其他 Host Provider 单向写入 API 凭据、检测 Codex CLI/登录，并执行最终环境检查。Setup 不再选择工作文件夹；进入主界面后再按需添加。
 
 ### 自动或手动启动 Local Host
 

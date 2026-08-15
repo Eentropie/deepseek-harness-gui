@@ -51,7 +51,7 @@ The visual system uses only black, white, and neutral grays. On macOS, the deskt
 
 1. Download the [latest macOS DMG/ZIP or Windows installer](https://github.com/Eentropie/deepseek-harness-macos-gui/releases/latest).
 2. Launch the app. The first-run wizard checks Node.js, detects an existing Harness checkout or installed package, and can start the Local Host for you.
-3. Add the write-only DeepSeek API key, verify the locally installed/signed-in Codex CLI if desired, and choose a work folder.
+3. Configure DeepSeek or any other Host model API, then verify the locally installed/signed-in Codex CLI if desired. Choose a work folder later from the main window.
 4. Select **Run environment check**. When every required item is ready, enter the workbench.
 
 The Host remains a separate local process at `127.0.0.1:3080`; the app starts it without modifying or embedding the upstream localhost interface. If automatic detection is unavailable, the wizard provides the exact install/login links and the manual commands below.

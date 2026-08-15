@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Icon } from './Icon.tsx'
+import { ProviderLogo } from './ProviderLogo.tsx'
 import { InteractionPanel, type QuestionAnswer } from './InteractionPanel.tsx'
 import { ReviewPanel } from './ReviewPanel.tsx'
 import { SidechatPanel } from './SidechatPanel.tsx'
@@ -115,6 +116,8 @@ export function Inspector({
   const percent = capacity > 0 ? Math.min(100, (used / capacity) * 100) : 0
   const tokens = values?.tokenUsage
   const stats = values?.sessionStats
+  const runtimeProvider = models?.current.provider ?? host?.provider
+  const runtimeModel = models?.current.model ?? host?.model
 
   useEffect(() => {
     if (reviewCount > 0) setView('review')
@@ -206,7 +209,7 @@ export function Inspector({
           <section className="inspector-section">
             <div className="section-heading"><span>Runtime</span><span className="status-chip" data-online={host !== undefined}>Local</span></div>
             <div className="runtime-card">
-              <div className="runtime-line"><span className="runtime-logo"><Icon name="terminal" size={15} /></span><div><strong>{host?.model ?? models?.current.model ?? 'Harness Host'}</strong><small>{host?.provider ?? 'Connecting…'}</small></div></div>
+              <div className="runtime-line"><span className="runtime-logo"><ProviderLogo provider={runtimeProvider} name={runtimeModel} size={17} /></span><div><strong>{runtimeModel ?? 'Harness Host'}</strong><small>{runtimeProvider ?? 'Connecting…'}</small></div></div>
               <dl className="detail-list">
                 <div><dt>Host</dt><dd>127.0.0.1:3080</dd></div>
                 <div><dt>Version</dt><dd>{host?.version ?? '—'}</dd></div>

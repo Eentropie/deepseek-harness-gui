@@ -22,6 +22,7 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
+    "@lobehub/icons-static-svg": "^1.94.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "react-markdown": "10.1.0",
@@ -29,10 +30,10 @@
     "ws": "8.21.3"
   },
   "devDependencies": {
-    "@types/ws": "8.18.1",
     "@types/node": "22.20.0",
     "@types/react": "18.3.28",
     "@types/react-dom": "18.3.7",
+    "@types/ws": "8.18.1",
     "@vitejs/plugin-react": "4.7.0",
     "electron": "43.4.0",
     "electron-builder": "26.15.3",
@@ -54,13 +55,17 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
+      "build/icon.icns",
+      "build/icon.ico",
       "build/icon.png",
       "package.json"
     ],
     "protocols": [
       {
         "name": "DeepSeek Harness session",
-        "schemes": ["dsh-workbench"]
+        "schemes": [
+          "dsh-workbench"
+        ]
       }
     ],
     "mac": {
@@ -68,24 +73,30 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["arm64"]
+          "arch": [
+            "arm64"
+          ]
         },
         {
           "target": "zip",
-          "arch": ["arm64"]
+          "arch": [
+            "arm64"
+          ]
         }
       ],
-      "icon": "build/icon.png",
+      "icon": "build/icon.icns",
       "artifactName": "DeepSeek-Harness-${version}-${arch}.${ext}"
     },
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
-      "icon": "build/icon.png",
+      "icon": "build/icon.ico",
       "artifactName": "DeepSeek-Harness-${version}-Windows-${arch}.${ext}"
     },
     "nsis": {

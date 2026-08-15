@@ -2546,7 +2546,6 @@ export function App() {
       <OnboardingWizard
         open={onboardingOpen}
         codex={codexCatalog}
-        workspaces={visibleWorkspaces}
         onClose={() => {
           localStorage.setItem(ONBOARDING_STORAGE_KEY, 'true')
           setOnboardingOpen(false)
@@ -2560,10 +2559,6 @@ export function App() {
           await refreshCodexCatalog(true)
         }}
         onRefreshCodex={async () => { await refreshCodexCatalog(true) }}
-        onWorkspaceReady={workspace => {
-          void refreshChrome()
-          beginPendingSession(workspace)
-        }}
       />
 
       <GoalDialog

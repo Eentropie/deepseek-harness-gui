@@ -1,18 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { billingApi, harnessApi, setupApi, subscribeSetup } from '../lib/api.ts'
-import type { CodexCatalog, SetupEvent, SetupSnapshot, WorkspaceSummary } from '../lib/types.ts'
+import { setupApi, subscribeSetup } from '../lib/api.ts'
+import type { CodexCatalog, SetupEvent, SetupSnapshot } from '../lib/types.ts'
 import { Icon } from './Icon.tsx'
+import { ModelsCredentialsSettings, type ProviderAccessSummary } from './ModelsCredentialsSettings.tsx'
+import { ProviderLogo } from './ProviderLogo.tsx'
 import { WhaleLogo } from './WhaleLogo.tsx'
 
 interface OnboardingWizardProps {
   open: boolean
   codex: CodexCatalog
-  workspaces: WorkspaceSummary[]
   onClose: () => void
   onComplete: () => void
   onHostReady: () => Promise<void>
   onRefreshCodex: () => Promise<void>
-  onWorkspaceReady: (workspace: WorkspaceSummary) => void
 }
 
 function message(reason: unknown): string {
@@ -26,20 +26,15 @@ function StatusMark({ ready, optional = false }: { ready: boolean; optional?: bo
 export function OnboardingWizard({
   open,
   codex,
-  workspaces,
   onClose,
   onComplete,
   onHostReady,
   onRefreshCodex,
-  onWorkspaceReady,
 }: OnboardingWizardProps) {
   const [setup, setSetup] = useState<SetupSnapshot>()
   const [checking, setChecking] = useState(false)
   const [startingHost, setStartingHost] = useState(false)
-  const [apiConfigured, setApiConfigured] = useState(false)
-  const [apiKey, setApiKey] = useState('')
-  const [savingKey, setSavingKey] = useState(false)
-  const [openingFolder, setOpeningFolder] = useState(false)
+  const [providerAccess, setProviderAccess] = useState<ProviderAccessSummary>({ configuredCredentials: 0, activeProviders: 0, liveModels: 0 })
   const [failure, setFailure] = useState<string>()
   const [hostLog, setHostLog] = useState('')
 
@@ -49,10 +44,7 @@ export function OnboardingWizard({
     try {
       const next = await setupApi.inspect()
       setSetup(next)
-      if (next.host.online) {
-        const result = await harnessApi.describeCredentials(['DEEPSEEK_API_KEY']).catch(() => undefined)
-        setApiConfigured(result?.credentials['DEEPSEEK_API_KEY']?.configured === true)
-      }
+      if (!next.host.online) setProviderAccess({ configuredCredentials: 0, activeProviders: 0, liveModels: 0 })
     } catch (reason) {
       setFailure(message(reason))
     } finally {
@@ -88,42 +80,11 @@ export function OnboardingWizard({
     }
   }
 
-  const saveKey = async (): Promise<void> => {
-    const key = apiKey.trim()
-    if (key === '' || savingKey || setup?.host.online !== true) return
-    setSavingKey(true)
-    setFailure(undefined)
-    try {
-      await harnessApi.setCredential('DEEPSEEK_API_KEY', key)
-      await billingApi.setDeepSeekKey(key).catch(() => undefined)
-      setApiKey('')
-      setApiConfigured(true)
-      await onHostReady()
-    } catch (reason) {
-      setFailure(message(reason))
-    } finally {
-      setSavingKey(false)
-    }
-  }
-
-  const chooseFolder = async (): Promise<void> => {
-    setOpeningFolder(true)
-    setFailure(undefined)
-    try {
-      const path = await harnessApi.pickDirectory()
-      if (path === null) return
-      const result = await harnessApi.createWorkspace(path)
-      onWorkspaceReady(result.workspace)
-    } catch (reason) {
-      setFailure(message(reason))
-    } finally {
-      setOpeningFolder(false)
-    }
-  }
-
-  const ready = setup?.host.online === true && apiConfigured && workspaces.length > 0
-  const progress = useMemo(() => [setup?.host.online === true, apiConfigured, codex.available, workspaces.length > 0]
-    .filter(Boolean).length, [apiConfigured, codex.available, setup?.host.online, workspaces.length])
+  const hostModelReady = providerAccess.configuredCredentials > 0
+  const modelAccessReady = hostModelReady || codex.available
+  const ready = setup?.host.online === true && modelAccessReady
+  const progress = useMemo(() => [setup?.host.online === true, hostModelReady, codex.available]
+    .filter(Boolean).length, [codex.available, hostModelReady, setup?.host.online])
 
   if (!open) return null
 
@@ -132,11 +93,11 @@ export function OnboardingWizard({
       <section className="onboarding-window" role="dialog" aria-modal="true" aria-label="First-run setup">
         <header className="onboarding-header">
           <div className="onboarding-whale"><WhaleLogo size={42} /></div>
-          <div><p>DEEPSEEK HARNESS</p><h2>Set up your local workbench</h2><span>One guided pass for the Host, model access, Codex, and your first work folder.</span></div>
+          <div><p>DEEPSEEK HARNESS</p><h2>Set up your local workbench</h2><span>Connect the Local Host and any model providers you want to use.</span></div>
           <button type="button" className="icon-button quiet" onClick={onClose} aria-label="Close setup"><Icon name="x" size={15} /></button>
         </header>
 
-        <div className="onboarding-progress"><i style={{ width: `${progress * 25}%` }} /><span>{progress} of 4 checks ready</span></div>
+        <div className="onboarding-progress"><i style={{ width: `${progress * (100 / 3)}%` }} /><span>{progress} of 3 checks ready</span></div>
 
         <div className="onboarding-steps">
           <article className="onboarding-step" data-ready={setup?.host.online === true}>
@@ -159,18 +120,19 @@ export function OnboardingWizard({
             </div>
           </article>
 
-          <article className="onboarding-step" data-ready={apiConfigured}>
-            <div className="onboarding-step-icon whale"><WhaleLogo size={19} /></div>
+          <article className="onboarding-step onboarding-model-step" data-ready={hostModelReady}>
+            <div className="onboarding-step-icon"><Icon name="brain" size={18} /></div>
             <div className="onboarding-step-copy">
-              <header><strong>DeepSeek API</strong><StatusMark ready={apiConfigured} /></header>
-              <p>{apiConfigured ? 'DEEPSEEK_API_KEY is configured in the Local Host.' : 'Paste one key once. It is sent through the restricted credential bridge and is never shown again.'}</p>
-              {!apiConfigured && <div className="onboarding-key"><input type="password" value={apiKey} disabled={setup?.host.online !== true} placeholder={setup?.host.online === true ? 'sk-…' : 'Start the Host first'} onChange={event => setApiKey(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void saveKey() }} /><button type="button" className="primary" disabled={apiKey.trim() === '' || savingKey || setup?.host.online !== true} onClick={() => { void saveKey() }}>{savingKey ? 'Saving…' : 'Save key'}</button></div>}
+              <header><strong>Model APIs</strong><StatusMark ready={hostModelReady} optional={codex.available} /></header>
+              <p>{hostModelReady
+                ? `${providerAccess.configuredCredentials} Host credential${providerAccess.configuredCredentials === 1 ? '' : 's'} configured · ${providerAccess.liveModels} live models.`
+                : codex.available ? 'Optional when Codex is available. Add DeepSeek or another Host provider now or later.' : 'Configure DeepSeek or any other provider exposed by the Local Host. Stored keys are never read back.'}</p>
+              <ModelsCredentialsSettings active={setup?.host.online === true} compact onSummary={setProviderAccess} />
             </div>
-            <div className="onboarding-step-actions"><button type="button" onClick={() => { void setupApi.openExternal('deepseek-key') }}>Open API keys</button></div>
           </article>
 
           <article className="onboarding-step" data-ready={codex.available}>
-            <div className="onboarding-step-icon"><Icon name="brain" size={17} /></div>
+            <div className="onboarding-step-icon"><ProviderLogo provider="codex-cli" size={20} /></div>
             <div className="onboarding-step-copy">
               <header><strong>ChatGPT · Codex CLI</strong><StatusMark ready={codex.available} optional /></header>
               <p>{codex.available ? `${codex.models.length} account-scoped models discovered.` : codex.error ?? 'Install Codex CLI and sign in with your own ChatGPT account.'}</p>
@@ -182,20 +144,12 @@ export function OnboardingWizard({
             </div>
           </article>
 
-          <article className="onboarding-step" data-ready={workspaces.length > 0}>
-            <div className="onboarding-step-icon"><Icon name="folder" size={17} /></div>
-            <div className="onboarding-step-copy">
-              <header><strong>Work folder</strong><StatusMark ready={workspaces.length > 0} /></header>
-              <p>{workspaces.length > 0 ? `${workspaces.length} local work folder${workspaces.length === 1 ? '' : 's'} available.` : 'Choose the directory that agents are allowed to inspect and edit.'}</p>
-            </div>
-            <div className="onboarding-step-actions"><button type="button" className={workspaces.length === 0 ? 'primary' : undefined} onClick={() => { void chooseFolder() }} disabled={openingFolder || setup?.host.online !== true}>{openingFolder ? 'Opening…' : 'Choose folder…'}</button></div>
-          </article>
         </div>
 
         {failure !== undefined && <div className="onboarding-error"><Icon name="activity" size={13} /><span>{failure}</span></div>}
 
         <footer className="onboarding-footer">
-          <span>{ready ? 'Environment ready. You can start a real session now.' : 'Codex is optional; Host, DeepSeek API, and a work folder are required.'}</span>
+          <span>{ready ? 'Environment ready. Add or switch work folders from the main window when needed.' : 'The Local Host and at least one model connection are required.'}</span>
           <div><button type="button" onClick={onClose}>Finish later</button><button type="button" className="primary" disabled={!ready} onClick={onComplete}>Enter DeepSeek Harness</button></div>
         </footer>
       </section>

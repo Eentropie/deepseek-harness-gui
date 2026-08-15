@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { harnessApi } from '../lib/api.ts'
+import { billingApi, harnessApi } from '../lib/api.ts'
 import { apiKeyFailure, deriveCredentialRef } from '../lib/provider-settings.ts'
 import { asRecord, hasAt, valueAt } from '../lib/settings-schema.ts'
 import type {
@@ -12,6 +12,7 @@ import type {
   SettingsPathOpView,
 } from '../lib/types.ts'
 import { Icon } from './Icon.tsx'
+import { ProviderLogo } from './ProviderLogo.tsx'
 
 interface ModelsSnapshot {
   providers: ConfigurableProviderView[]
@@ -19,6 +20,12 @@ interface ModelsSnapshot {
   catalog: HostModelCatalog
   credentials: Record<string, CredentialView>
   credentialError?: string
+}
+
+export interface ProviderAccessSummary {
+  configuredCredentials: number
+  activeProviders: number
+  liveModels: number
 }
 
 function errorText(reason: unknown): string {
@@ -107,7 +114,10 @@ function ProviderEditor({ snapshot, entry, onChanged }: {
         }
       }
       if (ops.length > 0) await harnessApi.mutateSettings(namespace.ns, ops, namespace.revision)
-      if (trimmedKey !== '') await harnessApi.setCredential(credentialRef, trimmedKey)
+      if (trimmedKey !== '') {
+        await harnessApi.setCredential(credentialRef, trimmedKey)
+        if (credentialRef === 'DEEPSEEK_API_KEY') await billingApi.setDeepSeekKey(trimmedKey).catch(() => undefined)
+      }
       setKeyDraft('')
       setStatus(configured ? 'Provider settings saved.' : 'Provider activated.')
       await onChanged()
@@ -178,7 +188,7 @@ function ProviderEditor({ snapshot, entry, onChanged }: {
   return (
     <div className="provider-editor-card">
       <header>
-        <div className="provider-avatar"><Icon name="brain" size={17} /></div>
+        <div className="provider-avatar"><ProviderLogo provider={entry.provider} name={entry.displayName} size={19} /></div>
         <div><strong>{entry.displayName}</strong><code>{entry.provider}</code></div>
         <span className="provider-state" data-active={entry.active}>{entry.active ? 'Active' : configured ? 'Configured' : 'Available'}</span>
       </header>
@@ -218,7 +228,7 @@ function ProviderEditor({ snapshot, entry, onChanged }: {
       {discovered !== undefined && (
         <div className="discovered-models">
           {discovered.length === 0 ? <span>No models were advertised.</span> : discovered.map(model => (
-            <div key={model.id}><strong>{model.name ?? model.id}</strong><code>{model.id}</code><span>{model.contextWindow === undefined ? '' : `${model.contextWindow.toLocaleString()} ctx`}</span></div>
+            <div key={model.id}><ProviderLogo provider={entry.provider} name={model.name} size={14} /><strong>{model.name ?? model.id}</strong><code>{model.id}</code><span>{model.contextWindow === undefined ? '' : `${model.contextWindow.toLocaleString()} ctx`}</span></div>
           ))}
         </div>
       )}
@@ -244,7 +254,11 @@ function ProviderEditor({ snapshot, entry, onChanged }: {
   )
 }
 
-export function ModelsCredentialsSettings({ active }: { active: boolean }) {
+export function ModelsCredentialsSettings({ active, compact = false, onSummary }: {
+  active: boolean
+  compact?: boolean
+  onSummary?: (summary: ProviderAccessSummary) => void
+}) {
   const [snapshot, setSnapshot] = useState<ModelsSnapshot>()
   const [selectedProvider, setSelectedProvider] = useState<string>()
   const [addProvider, setAddProvider] = useState('')
@@ -273,6 +287,11 @@ export function ModelsCredentialsSettings({ active }: { active: boolean }) {
       }
       const next: ModelsSnapshot = { providers: providerResult.providers, settings, catalog, credentials, ...(credentialError === undefined ? {} : { credentialError }) }
       setSnapshot(next)
+      onSummary?.({
+        configuredCredentials: Object.values(credentials).filter(value => value.configured).length,
+        activeProviders: providerResult.providers.filter(entry => entry.active).length,
+        liveModels: catalog.groups.reduce((count, group) => count + group.models.length, 0),
+      })
       setSelectedProvider(current => providerResult.providers.some(entry => entry.provider === current)
         ? current
         : providerResult.providers.find(entry => entry.active)?.provider ?? providerResult.providers[0]?.provider)
@@ -293,6 +312,35 @@ export function ModelsCredentialsSettings({ active }: { active: boolean }) {
   }) ?? [], [snapshot])
   const availableProviders = useMemo(() => snapshot?.providers.filter(entry => !visibleProviders.some(visible => visible.provider === entry.provider)) ?? [], [snapshot, visibleProviders])
   const selected = snapshot?.providers.find(entry => entry.provider === selectedProvider)
+
+  if (compact) {
+    return (
+      <div className="onboarding-provider-config">
+        {failure !== undefined && <p className="host-setting-error">{failure}</p>}
+        {snapshot?.credentialError !== undefined && <p className="host-setting-error">Credential status unavailable: {snapshot.credentialError}</p>}
+        {snapshot === undefined ? (
+          <div className="onboarding-provider-loading">{loading ? 'Reading available providers…' : 'Start the Local Host to configure model APIs.'}</div>
+        ) : (
+          <>
+            <div className="onboarding-provider-toolbar">
+              <label>
+                <span>Provider</span>
+                <select value={selectedProvider ?? ''} onChange={event => setSelectedProvider(event.target.value)}>
+                  {snapshot.providers.map(entry => <option key={entry.provider} value={entry.provider}>{entry.displayName}</option>)}
+                </select>
+                <Icon name="chevron-down" size={11} />
+              </label>
+              <span>{Object.values(snapshot.credentials).filter(value => value.configured).length} credentials · {snapshot.catalog.groups.reduce((count, group) => count + group.models.length, 0)} live models</span>
+              <button type="button" onClick={() => { void load() }} disabled={loading}><Icon name="refresh" size={12} />{loading ? 'Refreshing…' : 'Refresh'}</button>
+            </div>
+            {selected === undefined
+              ? <div className="onboarding-provider-loading">No Host providers are available.</div>
+              : <ProviderEditor snapshot={snapshot} entry={selected} onChanged={load} />}
+          </>
+        )}
+      </div>
+    )
+  }
 
   return (
     <section className="settings-page models-settings-page">
@@ -323,8 +371,8 @@ export function ModelsCredentialsSettings({ active }: { active: boolean }) {
                 const ref = credentialRefOf(namespace, entry)
                 return (
                   <button type="button" key={entry.provider} data-active={entry.provider === selectedProvider} onClick={() => setSelectedProvider(entry.provider)}>
-                    <i data-live={entry.active} />
-                    <span><strong>{entry.displayName}</strong><small>{snapshot.credentials[ref]?.configured ? 'Credential configured' : entry.active ? 'Active route' : 'Configured'}</small></span>
+                    <span className="provider-nav-logo"><ProviderLogo provider={entry.provider} name={entry.displayName} size={18} /><i data-live={entry.active} /></span>
+                    <span className="provider-nav-copy"><strong>{entry.displayName}</strong><small>{snapshot.credentials[ref]?.configured ? 'Credential configured' : entry.active ? 'Active route' : 'Configured'}</small></span>
                     <Icon name="chevron-right" size={12} />
                   </button>
                 )

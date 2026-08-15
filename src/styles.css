@@ -1318,6 +1318,33 @@ a:focus-visible {
   background: var(--surface-soft);
 }
 
+.provider-logo {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  color: inherit;
+  line-height: 1;
+}
+
+.provider-logo > svg,
+.provider-logo > img,
+.provider-logo-brand-mark {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.provider-logo > svg {
+  overflow: visible;
+}
+
+.provider-logo-brand-mark > svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  color: inherit;
+}
+
 .message-column {
   min-width: 0;
   max-width: 100%;
@@ -2747,6 +2774,13 @@ a:focus-visible {
   pointer-events: none;
 }
 
+.sidechat-controls label > .provider-logo {
+  position: absolute;
+  left: 7px;
+  z-index: 1;
+  pointer-events: none;
+}
+
 .sidechat-controls select {
   width: 100%;
   height: 27px;
@@ -2807,6 +2841,9 @@ a:focus-visible {
 
 .sidechat-message header {
   margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   color: var(--muted-2);
   font-size: 7.5px;
   font-weight: 680;
@@ -3082,6 +3119,13 @@ a:focus-visible {
   background: color-mix(in srgb, var(--green) 3%, var(--surface-soft));
 }
 
+.onboarding-model-step {
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: start;
+}
+
+.onboarding-model-step > .onboarding-step-icon { margin-top: 2px; }
+
 .onboarding-step-icon {
   width: 36px;
   height: 36px;
@@ -3124,7 +3168,6 @@ a:focus-visible {
 }
 
 .onboarding-step-actions button,
-.onboarding-key button,
 .onboarding-footer button {
   min-height: 28px;
   padding: 0 9px;
@@ -3137,35 +3180,96 @@ a:focus-visible {
 }
 
 .onboarding-step-actions button:hover:not(:disabled),
-.onboarding-key button:hover:not(:disabled),
 .onboarding-footer button:hover:not(:disabled) { border-color: var(--border-strong); background: var(--surface-hover); }
 .onboarding-step-actions button.primary,
-.onboarding-key button.primary,
 .onboarding-footer button.primary { border-color: var(--ink); color: var(--main); background: var(--ink); }
 .onboarding-step-actions button:disabled,
-.onboarding-key button:disabled,
 .onboarding-footer button:disabled { opacity: 0.38; }
 
-.onboarding-key {
-  width: min(520px, 100%);
-  margin-top: 7px;
-  display: flex;
-  gap: 5px;
+.onboarding-provider-config {
+  margin-top: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
 }
 
-.onboarding-key input {
+.onboarding-provider-toolbar {
+  min-height: 44px;
+  padding: 7px 9px;
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-soft);
+}
+
+.onboarding-provider-toolbar > label {
+  position: relative;
   min-width: 0;
-  height: 29px;
-  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.onboarding-provider-toolbar > label > span {
+  color: var(--muted-2);
+  font-size: 8px;
+  font-weight: 620;
+}
+
+.onboarding-provider-toolbar select {
+  min-width: 0;
+  height: 28px;
+  padding: 0 25px 0 8px;
   flex: 1;
-  border: 1px solid var(--border-strong);
+  appearance: none;
+  border: 1px solid var(--border);
   border-radius: 7px;
   outline: 0;
-  color: var(--ink);
+  color: var(--ink-soft);
   background: var(--surface-raised);
-  font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 8.5px;
 }
+
+.onboarding-provider-toolbar label > svg {
+  position: absolute;
+  right: 8px;
+  pointer-events: none;
+  color: var(--muted-2);
+}
+
+.onboarding-provider-toolbar > span {
+  overflow: hidden;
+  color: var(--muted-2);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.onboarding-provider-toolbar > button {
+  height: 28px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--ink-soft);
+  background: var(--surface-raised);
+  font-size: 8px;
+}
+
+.onboarding-provider-toolbar > button:disabled { opacity: 0.4; }
+.onboarding-provider-loading { padding: 14px; color: var(--muted-2); font-size: 8.5px; }
+.onboarding-provider-config > .host-setting-error { margin: 0; padding: 9px 11px; }
+.onboarding-provider-config .provider-editor-card > header { min-height: 54px; padding: 8px 11px; }
+.onboarding-provider-config .provider-avatar { width: 31px; height: 31px; }
+.onboarding-provider-config .provider-form-grid { padding: 10px 11px; gap: 9px; }
+.onboarding-provider-config .provider-facts { padding: 0 11px 10px; }
+.onboarding-provider-config .provider-editor-card > footer { padding: 9px 11px; }
+.onboarding-provider-config .provider-editor-card > footer .settings-button { min-height: 28px; font-size: 8px; }
 
 .onboarding-log { margin-top: 6px; color: var(--muted-2); font-size: 8px; }
 .onboarding-log summary { cursor: pointer; }
@@ -4931,10 +5035,18 @@ a:focus-visible {
   font-size: 9.5px;
 }
 
-.settings-select svg {
+.settings-select > svg:last-child {
   position: absolute;
   right: 8px;
   pointer-events: none;
+}
+
+.settings-select-provider > .provider-logo {
+  margin-left: 9px;
+}
+
+.settings-select-provider select {
+  padding-left: 7px;
 }
 
 .settings-select:has(select:focus-visible) {
@@ -5239,6 +5351,11 @@ a:focus-visible {
 }
 
 .billing-provider-icon.whale {
+  border-color: transparent;
+  background: transparent;
+}
+
+.billing-provider-icon.chatgpt {
   border-color: transparent;
   background: transparent;
 }
@@ -5821,7 +5938,7 @@ a:focus-visible {
   background: var(--surface-selected);
 }
 
-.provider-browser > nav button > i,
+.provider-nav-logo > i,
 .provider-facts i {
   width: 7px;
   height: 7px;
@@ -5829,17 +5946,32 @@ a:focus-visible {
   border-radius: 50%;
 }
 
-.provider-browser > nav button > i[data-live='true'],
+.provider-nav-logo > i[data-live='true'],
 .provider-facts i[data-ok='true'] {
   border-color: var(--ink);
   background: var(--ink);
 }
 
-.provider-browser > nav button > span {
+.provider-nav-copy {
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 3px;
+}
+
+.provider-nav-logo {
+  position: relative;
+  display: grid;
+  place-items: center;
+  color: var(--ink-soft);
+}
+
+.provider-nav-logo > i {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  background: var(--surface-soft);
+  box-shadow: 0 0 0 2px var(--surface-soft);
 }
 
 .provider-browser > nav strong,
@@ -5995,7 +6127,7 @@ a:focus-visible {
   min-height: 38px;
   padding: 7px 9px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   border-top: 1px solid var(--border);
@@ -7110,6 +7242,19 @@ a:focus-visible {
 
   .provider-add-card > .settings-button {
     justify-content: center;
+  }
+
+  .onboarding-provider-toolbar {
+    grid-template-columns: 1fr auto;
+  }
+
+  .onboarding-provider-toolbar > span {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .onboarding-provider-config .provider-form-grid {
+    grid-template-columns: 1fr;
   }
 
   .settings-row {

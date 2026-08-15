@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { billingApi, codexApi, harnessApi, subscribeCodex } from '../lib/api.ts'
 import type { CodexRateLimitWindow, CodexUsageSnapshot, CredentialView, DeepSeekBillingSnapshot } from '../lib/types.ts'
 import { Icon } from './Icon.tsx'
+import { ProviderLogo } from './ProviderLogo.tsx'
 import { WhaleLogo } from './WhaleLogo.tsx'
 
 interface UsageBillingSettingsProps {
@@ -144,7 +145,7 @@ export function UsageBillingSettings({ active }: UsageBillingSettingsProps) {
 
       <article className="billing-provider-card">
         <header>
-          <div className="billing-provider-icon"><Icon name="brain" size={19} /></div>
+          <div className="billing-provider-icon chatgpt"><ProviderLogo provider="codex-cli" size={22} /></div>
           <div><span>CHATGPT ACCOUNT</span><strong>Codex CLI</strong></div>
           <em data-state={codex?.available === true ? 'ready' : 'offline'}>{codex?.available === true ? titleCase(codex.planType ?? codex.accountType ?? 'Connected') : 'Unavailable'}</em>
         </header>
