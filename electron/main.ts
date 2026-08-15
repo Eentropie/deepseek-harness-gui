@@ -944,7 +944,13 @@ if (!singleInstanceLock) {
   Menu.setApplicationMenu(null)
   await installAppProtocol()
   const controller = new PluginController()
-  const billing = new DeepSeekBillingService(join(app.getPath('userData'), 'billing-credentials.json'))
+  const userDataPath = app.getPath('userData')
+  const appDataPath = app.getPath('appData')
+  const billing = new DeepSeekBillingService(
+    join(userDataPath, 'billing-credentials.json'),
+    ['DeepSeek Workbench', 'DeepSeek Harness Workbench', 'Electron', 'deepseek-harness-workbench']
+      .map(name => join(appDataPath, name, 'billing-credentials.json')),
+  )
   setupService = new SetupService(HOST_ORIGIN, app.getPath('documents'), app.getPath('userData'))
   codexServer = new CodexAppServer(event => {
     BrowserWindow.getAllWindows().forEach(window => {

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { safeStorage } from 'electron'
 import { normalizeDeepSeekBalance, validateDeepSeekApiKey } from '../server/billing-protocol.ts'
@@ -18,7 +18,12 @@ function isMissingFile(reason: unknown): boolean {
 }
 
 export class DeepSeekBillingService {
-  constructor(private readonly credentialsFile: string) {}
+  private migrationAttempted = false
+
+  constructor(
+    private readonly credentialsFile: string,
+    private readonly legacyCredentialFiles: readonly string[] = [],
+  ) {}
 
   async snapshot(): Promise<DeepSeekBillingSnapshot> {
     const updatedAt = Date.now()
@@ -61,6 +66,7 @@ export class DeepSeekBillingService {
     if (process.env['DEEPSEEK_API_KEY']?.trim()) {
       throw new Error('The environment-owned DeepSeek API key cannot be replaced here')
     }
+    await this.migrateLegacyCredential()
     if (!safeStorage.isEncryptionAvailable()) {
       throw new Error('Operating-system secure credential storage is unavailable')
     }
@@ -77,6 +83,7 @@ export class DeepSeekBillingService {
     if (process.env['DEEPSEEK_API_KEY']?.trim()) {
       throw new Error('The environment-owned DeepSeek API key cannot be removed here')
     }
+    await this.migrateLegacyCredential()
     try {
       await unlink(this.credentialsFile)
     } catch (reason) {
@@ -104,6 +111,7 @@ export class DeepSeekBillingService {
         }
       }
     }
+    await this.migrateLegacyCredential()
     if (!safeStorage.isEncryptionAvailable()) {
       return {
         configured: false,
@@ -122,6 +130,35 @@ export class DeepSeekBillingService {
         configured: false,
         writable: true,
         error: 'The saved DeepSeek billing credential could not be decrypted',
+      }
+    }
+  }
+
+  /**
+   * Branding changed the Electron userData directory, but the billing file is
+   * already encrypted for the same OS account. Move only this known file from
+   * the legacy app directories before reading the current location.
+   */
+  private async migrateLegacyCredential(): Promise<void> {
+    if (this.migrationAttempted) return
+    this.migrationAttempted = true
+
+    try {
+      await stat(this.credentialsFile)
+      return
+    } catch (reason) {
+      if (!isMissingFile(reason)) return
+    }
+
+    for (const legacyFile of this.legacyCredentialFiles) {
+      if (legacyFile === this.credentialsFile) continue
+      try {
+        await stat(legacyFile)
+        await mkdir(dirname(this.credentialsFile), { recursive: true, mode: 0o700 })
+        await rename(legacyFile, this.credentialsFile)
+        return
+      } catch (reason) {
+        if (!isMissingFile(reason)) return
       }
     }
   }
