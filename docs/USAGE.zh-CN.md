@@ -20,7 +20,7 @@ DeepSeek Harness.app / DeepSeek Harness.exe
 
 ### 下载应用
 
-从[最新 Release](https://github.com/Eentropie/deepseek-harness-macos-gui/releases/latest)下载：
+从[最新 Release](https://github.com/Eentropie/deepseek-harness-gui/releases/latest)下载：
 
 - **macOS Apple Silicon：** 下载 `DeepSeek-Harness-0.2.1-arm64.dmg` 或 `.zip`，打开 `DeepSeek Harness.app`。未签名包首次可能需要右键/Control-click → **Open**。
 - **Windows x64：** 下载并运行 `DeepSeek-Harness-0.2.1-Windows-x64.exe`。NSIS 安装器支持选择目录、桌面快捷方式和开始菜单项；未签名包可能触发 Windows SmartScreen。

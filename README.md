@@ -7,7 +7,7 @@
 <p align="center"><strong>A native macOS and Windows workbench for DeepSeek Harness, Codex, and local coding workflows.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/Eentropie/deepseek-harness-macos-gui/releases/latest">Download latest</a> ·
+  <a href="https://github.com/Eentropie/deepseek-harness-gui/releases/latest">Download latest</a> ·
   <a href="./docs/USAGE.md">Usage guide</a> ·
   <a href="./docs/USAGE.zh-CN.md">中文使用说明</a>
 </p>
@@ -50,7 +50,7 @@ The visual system uses only black, white, and neutral grays. On macOS, the deskt
 
 ## Quick start
 
-1. Download the [latest macOS DMG/ZIP or Windows installer](https://github.com/Eentropie/deepseek-harness-macos-gui/releases/latest).
+1. Download the [latest macOS DMG/ZIP or Windows installer](https://github.com/Eentropie/deepseek-harness-gui/releases/latest).
 2. Launch the app. The first-run wizard checks Node.js, detects an existing Harness checkout or installed package, and can start the Local Host for you.
 3. Configure DeepSeek or any other Host model API, then verify the locally installed/signed-in Codex CLI if desired. Choose a work folder later from the main window.
 4. Select **Run environment check**. When every required item is ready, enter the workbench.
