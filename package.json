@@ -14,9 +14,9 @@
     "build": "tsc --noEmit && pnpm build:renderer && pnpm build:desktop",
     "desktop": "pnpm build && electron .",
     "pack:mac": "pnpm build && electron-builder --mac dir --arm64",
-    "dist:mac": "pnpm build && electron-builder --mac dmg zip --arm64",
+    "dist:mac": "pnpm build && electron-builder --mac dmg zip --arm64 --publish never",
     "pack:win": "pnpm build && electron-builder --win dir --x64",
-    "dist:win": "pnpm build && electron-builder --win nsis --x64",
+    "dist:win": "pnpm build && electron-builder --win nsis --x64 --publish never",
     "preview": "vite preview",
     "test": "vitest run",
     "check": "tsc --noEmit"
