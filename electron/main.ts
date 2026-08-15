@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { homedir } from 'node:os'
-import { readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { readFile, readdir, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, extname, isAbsolute, join, normalize, relative, resolve } from 'node:path'
 import {
   app,
@@ -21,7 +21,7 @@ import { CodexAppServer } from './codex-app-server.ts'
 import { DeepSeekBillingService } from './deepseek-billing.ts'
 import { assertDesktopRpcPayload } from './rpc-policy.ts'
 import { SetupService } from './setup-service.ts'
-import type { ProviderHandoffMessage, ReviewDocument, ReviewSnapshot } from '../src/lib/types.ts'
+import type { ProviderHandoffMessage, ReviewDirectorySnapshot, ReviewDocument, ReviewSnapshot } from '../src/lib/types.ts'
 
 type ConnectionState = 'connecting' | 'connected' | 'reconnecting'
 
@@ -490,18 +490,75 @@ async function git(cwd: string, args: string[]): Promise<{ code: number; stdout:
   })
 }
 
-async function reviewFilePath(cwd: string, requestedPath: string): Promise<{ root: string; target: string; path: string }> {
-  if (requestedPath.includes('\0') || requestedPath.trim() === '' || isAbsolute(requestedPath)) throw new Error('Review path must be relative to the work folder')
-  const path = normalize(requestedPath).replaceAll('\\', '/')
+async function reviewEntryPath(cwd: string, requestedPath: string, allowRoot = false): Promise<{ root: string; target: string; path: string }> {
+  if (requestedPath.includes('\0') || isAbsolute(requestedPath)) throw new Error('Review path must be relative to the work folder')
+  const path = normalize(requestedPath.trim() === '' ? '.' : requestedPath).replaceAll('\\', '/')
   if (path === '..' || path.startsWith('../')) throw new Error('Review path leaves the work folder')
-  const [root, target] = await Promise.all([realpath(cwd), realpath(resolve(cwd, path))])
+  const root = await realpath(cwd)
+  const target = await realpath(resolve(root, path))
   const fromRoot = relative(root, target)
   if (fromRoot === '..' || fromRoot.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(fromRoot)) {
     throw new Error('Review path resolves outside the work folder')
   }
-  const metadata = await stat(target)
+  const displayPath = path === '.' ? '' : path
+  if (!allowRoot && displayPath === '') throw new Error('Review requires a file inside the work folder')
+  return { root, target, path: displayPath }
+}
+
+async function reviewFilePath(cwd: string, requestedPath: string): Promise<{ root: string; target: string; path: string }> {
+  const resolved = await reviewEntryPath(cwd, requestedPath)
+  const metadata = await stat(resolved.target)
   if (!metadata.isFile() || metadata.size > 2_000_000) throw new Error('Review supports text files up to 2 MB')
-  return { root, target, path: fromRoot.replaceAll('\\', '/') }
+  return resolved
+}
+
+async function reviewDirectory(cwd: string, requestedPath: string): Promise<ReviewDirectorySnapshot> {
+  const resolved = await reviewEntryPath(cwd, requestedPath, true)
+  const metadata = await stat(resolved.target)
+  if (!metadata.isDirectory()) throw new Error('Review tree path is not a directory')
+  const rawEntries = await readdir(resolved.target, { withFileTypes: true })
+  const entries: ReviewDirectorySnapshot['entries'] = []
+  for (const entry of rawEntries) {
+    let kind: 'directory' | 'file' | undefined
+    let symlink = false
+    if (entry.isDirectory()) kind = 'directory'
+    else if (entry.isFile()) kind = 'file'
+    else if (entry.isSymbolicLink()) {
+      symlink = true
+      try {
+        const linked = await realpath(join(resolved.target, entry.name))
+        const fromRoot = relative(resolved.root, linked)
+        if (fromRoot === '..' || fromRoot.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(fromRoot)) continue
+        const linkedMetadata = await stat(linked)
+        if (linkedMetadata.isDirectory()) kind = 'directory'
+        else if (linkedMetadata.isFile()) kind = 'file'
+      } catch {
+        continue
+      }
+    }
+    if (kind === undefined) continue
+    entries.push({
+      name: entry.name,
+      path: resolved.path === '' ? entry.name : `${resolved.path}/${entry.name}`,
+      kind,
+      hidden: entry.name.startsWith('.'),
+      ...(symlink ? { symlink: true } : {}),
+    })
+  }
+  entries.sort((left, right) => left.kind === right.kind
+    ? left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: 'base' })
+    : left.kind === 'directory' ? -1 : 1)
+  const limit = 1_000
+  return { path: resolved.path, entries: entries.slice(0, limit), truncated: entries.length > limit }
+}
+
+async function openReviewFile(cwd: string, requestedPath: string): Promise<{ opened: true }> {
+  const resolved = await reviewEntryPath(cwd, requestedPath)
+  const metadata = await stat(resolved.target)
+  if (!metadata.isFile()) throw new Error('Only files can be opened from the Review tree')
+  const failure = await shell.openPath(resolved.target)
+  if (failure !== '') throw new Error(failure)
+  return { opened: true }
 }
 
 function contentHash(content: Buffer | string): string {
@@ -753,6 +810,15 @@ function installIpc(
     await assertCodexWorkspace(sessionId, cwd)
     return reviewSnapshot(cwd)
   })
+  ipcMain.handle('dsh:review-directory', async (event, raw: unknown) => {
+    assertTrustedSender(event)
+    const input = object(raw)
+    const sessionId = requiredString(input['sessionId'], 'review session id')
+    const cwd = requiredString(input['cwd'], 'review working directory')
+    const path = typeof input['path'] === 'string' ? input['path'] : ''
+    await assertCodexWorkspace(sessionId, cwd)
+    return reviewDirectory(cwd, path)
+  })
   ipcMain.handle('dsh:review-read', async (event, raw: unknown) => {
     assertTrustedSender(event)
     const input = object(raw)
@@ -784,6 +850,14 @@ function installIpc(
       throw reason
     }
     return reviewDocument(cwd, resolved.path)
+  })
+  ipcMain.handle('dsh:review-open', async (event, raw: unknown) => {
+    assertTrustedSender(event)
+    const input = object(raw)
+    const sessionId = requiredString(input['sessionId'], 'review session id')
+    const cwd = requiredString(input['cwd'], 'review working directory')
+    await assertCodexWorkspace(sessionId, cwd)
+    return openReviewFile(cwd, requiredString(input['path'], 'review file path'))
   })
   ipcMain.handle('dsh:terminal-run', async (event, raw: unknown) => {
     assertTrustedSender(event)

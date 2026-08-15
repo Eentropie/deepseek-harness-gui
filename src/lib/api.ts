@@ -22,6 +22,7 @@ import type {
   PromptContentPart,
   QueueItem,
   ReviewDocument,
+  ReviewDirectorySnapshot,
   ReviewSnapshot,
   RpcEnvelope,
   SessionSearchHit,
@@ -444,6 +445,10 @@ export const reviewApi = {
     if (window.dshDesktop === undefined) return Promise.reject(new Error('Workspace review requires the desktop app'))
     return window.dshDesktop.reviewList(input)
   },
+  directory: (input: { sessionId: string; cwd: string; path: string }): Promise<ReviewDirectorySnapshot> => {
+    if (window.dshDesktop === undefined) return Promise.reject(new Error('Workspace review requires the desktop app'))
+    return window.dshDesktop.reviewDirectory(input)
+  },
   read: (input: { sessionId: string; cwd: string; path: string }): Promise<ReviewDocument> => {
     if (window.dshDesktop === undefined) return Promise.reject(new Error('Workspace review requires the desktop app'))
     return window.dshDesktop.reviewRead(input)
@@ -451,6 +456,10 @@ export const reviewApi = {
   write: (input: { sessionId: string; cwd: string; path: string; content: string; expectedHash: string }): Promise<ReviewDocument> => {
     if (window.dshDesktop === undefined) return Promise.reject(new Error('Workspace review requires the desktop app'))
     return window.dshDesktop.reviewWrite(input)
+  },
+  open: (input: { sessionId: string; cwd: string; path: string }): Promise<{ opened: true }> => {
+    if (window.dshDesktop === undefined) return Promise.reject(new Error('Opening workspace files requires the desktop app'))
+    return window.dshDesktop.reviewOpen(input)
   },
 }
 

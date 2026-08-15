@@ -286,6 +286,20 @@ export interface ReviewSnapshot {
   error?: string
 }
 
+export interface ReviewTreeEntry {
+  name: string
+  path: string
+  kind: 'directory' | 'file'
+  hidden: boolean
+  symlink?: boolean
+}
+
+export interface ReviewDirectorySnapshot {
+  path: string
+  entries: ReviewTreeEntry[]
+  truncated: boolean
+}
+
 export interface ReviewDocument {
   path: string
   content: string

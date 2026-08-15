@@ -37,8 +37,10 @@ contextBridge.exposeInMainWorld('dshDesktop', {
   setupOpenExternal: (target: string) => ipcRenderer.invoke('dsh:setup-open-external', target),
   setupOpenCodexLogin: () => ipcRenderer.invoke('dsh:setup-open-codex-login'),
   reviewList: (input: unknown) => ipcRenderer.invoke('dsh:review-list', input),
+  reviewDirectory: (input: unknown) => ipcRenderer.invoke('dsh:review-directory', input),
   reviewRead: (input: unknown) => ipcRenderer.invoke('dsh:review-read', input),
   reviewWrite: (input: unknown) => ipcRenderer.invoke('dsh:review-write', input),
+  reviewOpen: (input: unknown) => ipcRenderer.invoke('dsh:review-open', input),
   connectionState: () => ipcRenderer.invoke('dsh:connection-state') as Promise<ConnectionState>,
   onDownlink: (listener: (frame: unknown) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, frame: unknown): void => listener(frame)

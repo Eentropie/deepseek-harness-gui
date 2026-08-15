@@ -11,6 +11,7 @@ import type {
   PluginControlSnapshot,
   PluginToggleResult,
   ReviewDocument,
+  ReviewDirectorySnapshot,
   ReviewSnapshot,
   SessionExportResult,
   SetupEvent,
@@ -67,8 +68,10 @@ interface DeepSeekDesktopBridge {
   setupOpenExternal: (target: 'deepseek-key' | 'node' | 'codex-install') => Promise<void>
   setupOpenCodexLogin: () => Promise<void>
   reviewList: (input: { sessionId: string; cwd: string }) => Promise<ReviewSnapshot>
+  reviewDirectory: (input: { sessionId: string; cwd: string; path: string }) => Promise<ReviewDirectorySnapshot>
   reviewRead: (input: { sessionId: string; cwd: string; path: string }) => Promise<ReviewDocument>
   reviewWrite: (input: { sessionId: string; cwd: string; path: string; content: string; expectedHash: string }) => Promise<ReviewDocument>
+  reviewOpen: (input: { sessionId: string; cwd: string; path: string }) => Promise<{ opened: true }>
   connectionState: () => Promise<DesktopConnectionState>
   onDownlink: (listener: (frame: DownlinkFrame) => void) => () => void
   onConnectionState: (listener: (state: DesktopConnectionState) => void) => () => void

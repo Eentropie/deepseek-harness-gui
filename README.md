@@ -123,7 +123,7 @@ For the exact Host parity boundary and recommended next features, see [HOST_CAPA
 The right side panel shares one fixed area among four views:
 
 - **Context:** the complete runtime, token, session, task, goal, skills, and activity view.
-- **Review:** pending approvals plus changed-file discovery, Git diff reading, and guarded editing of existing text files inside the selected work folder. Saves use an expected-content hash so a file changed by another process is not overwritten.
+- **Review:** pending approvals plus a lazy, collapsible browser for the selected main chat's work folder. Select text files for Git diff reading and guarded editing; double-click or use the external-open control to launch any file with the operating system's associated app. Saves use an expected-content hash so a file changed by another process is not overwritten.
 - **Sidechat:** side threads are owned by the selected main chat. Switching the main chat switches its Sidechat collection; one main chat can keep multiple closable Sidechats, each with its own draft, transcript, model, reasoning effort, and permission mode. Orphaned local tabs are reconciled when their Host session or Codex thread no longer exists.
 - **Agents:** direct Subagent status and transcript navigation.
 
