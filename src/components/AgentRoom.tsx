@@ -5,6 +5,7 @@ import {
   AGENT_ROOM_CODEX_PROVIDER,
   AGENT_ROOM_ROLES,
   agentRoomReport,
+  agentRoomEffortLabel,
   agentPermissionChoices,
   agentRoomOwnerId,
   buildAgentRoomContext,
@@ -677,7 +678,7 @@ export function AgentRoom({
           <label><span>{tr('Model source', '模型来源')}</span><select value={`${draft.provider}\u0000${draft.model}`} onChange={event => handleModelDraft(event.target.value)}>{groups.map(group => <optgroup key={group.id} label={group.name}>{group.models.map(model => <option key={model.id} value={`${group.id}\u0000${model.id}`}>{model.name}</option>)}</optgroup>)}</select></label>
           <div className="agent-create-grid">
             <label><span>Role</span><select value={draft.role} onChange={event => setDraft(current => current === undefined ? current : { ...current, role: event.target.value as AgentRoomRole })}>{AGENT_ROOM_ROLES.map(role => <option key={role.value} value={role.value}>{role.name}</option>)}</select></label>
-            <label><span>Effort</span><select value={draft.effort ?? ''} disabled={(selectedModel?.reasoning?.efforts.length ?? 0) === 0} onChange={event => setDraft(current => current === undefined ? current : { ...current, effort: event.target.value || undefined })}><option value="">Default</option>{selectedModel?.reasoning?.efforts.map(effort => <option key={effort.id} value={effort.id}>{effort.name}</option>)}</select></label>
+            <label><span>Effort</span><select value={draft.effort ?? ''} disabled={(selectedModel?.reasoning?.efforts.length ?? 0) === 0} onChange={event => setDraft(current => current === undefined ? current : { ...current, effort: event.target.value || undefined })}><option value="">Default</option>{selectedModel?.reasoning?.efforts.map(effort => <option key={effort.id} value={effort.id}>{agentRoomEffortLabel(draft.provider, selectedModel, effort)}</option>)}</select></label>
             <label><span>{tr('Permission', '权限')}</span><select value={draft.permission} onChange={event => setDraft(current => current === undefined ? current : { ...current, permission: event.target.value })}>{selectedPermissions.map(choice => <option key={choice.value} value={choice.value}>{choice.name}</option>)}</select></label>
             <label><span>Web</span><select value={draft.network} onChange={event => setDraft(current => current === undefined ? current : { ...current, network: event.target.value as NetworkMode })}><option value="off">Off</option><option value="auto">Auto</option><option value="ask">Ask each round</option></select></label>
           </div>

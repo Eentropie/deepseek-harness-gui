@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   agentPermissionChoices,
+  agentRoomEffortLabel,
   buildAgentRoomContext,
   configuredAgentGroups,
   independentAuditPrompt,
@@ -34,6 +35,12 @@ describe('Agent Room', () => {
       ],
       failures: [{ id: 'unconfigured', name: 'Unavailable API', message: 'credential missing' }],
     }).map(group => group.id)).toEqual(['deepseek', 'codex-cli'])
+  })
+
+  it('uses Thinking for Claude while preserving other effort labels', () => {
+    expect(agentRoomEffortLabel('anthropic', { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }, { id: 'high', name: 'High' })).toBe('Thinking')
+    expect(agentRoomEffortLabel('antigravity-cli', { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }, { id: 'thinking', name: 'Thinking' })).toBe('Thinking')
+    expect(agentRoomEffortLabel('codex-cli', { id: 'gpt-5', name: 'GPT-5' }, { id: 'high', name: 'High' })).toBe('High')
   })
 
   it('uses the real Host permission for DeepSeek and a real read-only Codex sandbox', () => {

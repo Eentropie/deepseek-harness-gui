@@ -1,4 +1,4 @@
-import type { ConversationMessage, ModelGroup, NetworkMode, SessionModels } from './types.ts'
+import type { ConversationMessage, ModelEffort, ModelEntry, ModelGroup, NetworkMode, SessionModels } from './types.ts'
 
 export const AGENT_ROOM_STORAGE_PREFIX = 'dsh-workbench-agent-room-v1:'
 export const AGENT_ROOM_OWNER_PREFIX = 'agent-room:'
@@ -206,6 +206,13 @@ export function configuredAgentGroups(models?: SessionModels): ModelGroup[] {
   if (models === undefined) return []
   const failed = new Set(models.failures.map(failure => failure.id))
   return models.groups.filter(group => group.models.length > 0 && !failed.has(group.id))
+}
+
+/** Keep provider wire values intact while using Claude's own Thinking terminology in Agent Room. */
+export function agentRoomEffortLabel(provider: string, model: Pick<ModelEntry, 'id' | 'name'> | undefined, effort: ModelEffort): string {
+  const source = `${provider} ${model?.id ?? ''} ${model?.name ?? ''}`
+  const claude = /(?:claude|anthropic)/i.test(source)
+  return claude && /^(?:high|thinking)$/i.test(effort.id) ? 'Thinking' : effort.name
 }
 
 export function agentPermissionChoices(provider: string, hostPermission = 'workspace-write'): AgentPermissionChoice[] {
