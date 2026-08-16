@@ -10,6 +10,7 @@ import type { QuestionAnswer } from './components/InteractionPanel.tsx'
 import { JobDock } from './components/JobDock.tsx'
 import { OnboardingWizard } from './components/OnboardingWizard.tsx'
 import { PluginManager } from './components/PluginManager.tsx'
+import { RenameDialog } from './components/RenameDialog.tsx'
 import {
   SettingsPanel,
   type InterfaceDensity,
@@ -20,7 +21,7 @@ import { Sidebar } from './components/Sidebar.tsx'
 import { TerminalDock } from './components/TerminalDock.tsx'
 import { antigravityApi, codexApi, harnessApi, subscribeAntigravity, subscribeCodex, subscribeDownlinks } from './lib/api.ts'
 import { persistentHostPermission, type ApprovalChoice } from './lib/approval.ts'
-import { applyCodexDeltas, applyCodexToolEvent, type CodexDeltaEvent } from './lib/codex-stream.ts'
+import { applyCodexDeltas, applyCodexToolEvent, type CodexDeltaEvent, type ProviderDeltaEvent } from './lib/codex-stream.ts'
 import {
   appendLiveHistory,
   applyLiveProjection,
@@ -36,6 +37,7 @@ import { chooseGreeting } from './lib/greetings.ts'
 import {
   collectProviderHandoff,
   mergeAllProviderTranscripts,
+  ProviderTranscriptMerger,
   providerHandoffText,
 } from './lib/provider-handoff.ts'
 import {
@@ -87,6 +89,12 @@ import type {
 } from './lib/types.ts'
 
 type ConnectionState = 'connecting' | 'connected' | 'reconnecting'
+
+interface SidechatDeltaEnvelope {
+  owner: string
+  provider: 'codex' | 'antigravity'
+  event: ProviderDeltaEvent
+}
 
 const EMPTY_HISTORY: HistoryPage = { events: [], hasMore: false }
 const CODEX_PROVIDER = 'codex-cli'
@@ -536,6 +544,9 @@ export function App() {
   const [goalDialog, setGoalDialog] = useState<{ mode: 'create' | 'edit'; objective: string; rounds: number }>()
   const [goalDialogBusy, setGoalDialogBusy] = useState(false)
   const [goalDialogError, setGoalDialogError] = useState<string>()
+  const [renameDialog, setRenameDialog] = useState<{ kind: 'session' | 'workspace'; id: string; initialValue: string }>()
+  const [renameDialogBusy, setRenameDialogBusy] = useState(false)
+  const [renameDialogError, setRenameDialogError] = useState<string>()
   const [appError, setAppError] = useState<string>()
   const [actionError, setActionError] = useState<string>()
   const [pluginsOpen, setPluginsOpen] = useState(false)
@@ -585,13 +596,18 @@ export function App() {
   const sidechatCodexActiveRef = useRef(false)
   const sidechatAntigravityActiveRef = useRef(false)
   const sidechatGeneration = useRef(0)
+  const sidechatDeltaQueue = useRef<SidechatDeltaEnvelope[]>([])
+  const sidechatDeltaTimer = useRef<number>()
   const providerTranscriptCache = useRef<Record<string, {
     deepSeek: ConversationMessage[]
     codex: ConversationMessage[]
     antigravity: ConversationMessage[]
   }>>({})
+  const providerTranscriptMerger = useRef(new ProviderTranscriptMerger())
   const agentRoomDirectiveArmedAt = useRef<Record<string, number>>({})
   const handledAgentRoomDirectives = useRef(new Set<string>())
+  const openFolderShortcutRef = useRef<() => void>(() => undefined)
+  const newSessionShortcutRef = useRef<() => void>(() => undefined)
   const dark = themeMode === 'dark' || (themeMode === 'system' && systemDark)
   const startupGreeting = useMemo(() => {
     const key = `${GREETING_STORAGE_KEY}:${locale}`
@@ -695,7 +711,7 @@ export function App() {
   const retainedAntigravityMessages = antigravityMessages.length > 0 ? antigravityMessages : providerCache?.antigravity ?? []
   const unifiedMessages = useMemo(
     () => subagentView === undefined
-      ? mergeAllProviderTranscripts(retainedDeepSeekMessages, retainedCodexMessages, retainedAntigravityMessages)
+      ? providerTranscriptMerger.current.merge(retainedDeepSeekMessages, retainedCodexMessages, retainedAntigravityMessages)
       : messages,
     [messages, retainedAntigravityMessages, retainedCodexMessages, retainedDeepSeekMessages, subagentView],
   )
@@ -1149,6 +1165,30 @@ export function App() {
     antigravityDeltaTimer.current = window.setTimeout(flushAntigravityDeltas, 48)
   }, [flushAntigravityDeltas])
 
+  const flushSidechatDeltas = useCallback((): void => {
+    if (sidechatDeltaTimer.current !== undefined) window.clearTimeout(sidechatDeltaTimer.current)
+    sidechatDeltaTimer.current = undefined
+    if (sidechatDeltaQueue.current.length === 0) return
+    const queued = sidechatDeltaQueue.current
+    sidechatDeltaQueue.current = []
+    const owner = sidechatOwnerRef.current
+    const provider = sidechatAntigravityActiveRef.current
+      ? 'antigravity'
+      : sidechatCodexActiveRef.current ? 'codex' : undefined
+    if (owner === undefined || provider === undefined) return
+    const events = queued.flatMap(item => item.owner === owner && item.provider === provider ? [item.event] : [])
+    if (events.length === 0) return
+    setSidechatMessages(current => provider === 'antigravity'
+      ? applyCodexDeltas(current, events, Date.now(), { idPrefix: 'antigravity', agent: 'Antigravity' })
+      : applyCodexDeltas(current, events))
+  }, [])
+
+  const queueSidechatDelta = useCallback((owner: string, provider: SidechatDeltaEnvelope['provider'], event: ProviderDeltaEvent): void => {
+    sidechatDeltaQueue.current.push({ owner, provider, event })
+    if (sidechatDeltaTimer.current !== undefined) return
+    sidechatDeltaTimer.current = window.setTimeout(flushSidechatDeltas, 48)
+  }, [flushSidechatDeltas])
+
   const updateAntigravityQueues = useCallback((update: (current: Record<string, AntigravityQueuedPrompt[]>) => Record<string, AntigravityQueuedPrompt[]>): void => {
     const next = update(antigravityQueuesRef.current)
     antigravityQueuesRef.current = next
@@ -1212,6 +1252,7 @@ export function App() {
   useEffect(() => () => {
     if (codexDeltaTimer.current !== undefined) window.clearTimeout(codexDeltaTimer.current)
     if (antigravityDeltaTimer.current !== undefined) window.clearTimeout(antigravityDeltaTimer.current)
+    if (sidechatDeltaTimer.current !== undefined) window.clearTimeout(sidechatDeltaTimer.current)
   }, [])
 
   useEffect(() => {
@@ -1272,6 +1313,9 @@ export function App() {
 
   useEffect(() => {
     const generation = ++sidechatGeneration.current
+    if (sidechatDeltaTimer.current !== undefined) window.clearTimeout(sidechatDeltaTimer.current)
+    sidechatDeltaTimer.current = undefined
+    sidechatDeltaQueue.current = []
     sidechatOwnerRef.current = sidechatOwner
     sidechatCodexActiveRef.current = sidechatCodexActive
     sidechatAntigravityActiveRef.current = sidechatAntigravityActive
@@ -1343,14 +1387,16 @@ export function App() {
         return
       }
       if (event.type === 'assistant-delta' || event.type === 'reasoning-delta') {
-        setSidechatMessages(current => applyCodexDeltas(current, [event]))
+        queueSidechatDelta(sessionId, 'codex', event)
         return
       }
       if (event.type === 'tool-item') {
+        flushSidechatDeltas()
         setSidechatMessages(current => applyCodexToolEvent(current, event))
         return
       }
       if (event.type === 'turn-completed') {
+        flushSidechatDeltas()
         setSidechatTurnId(undefined)
         if (event.status === 'failed') setSidechatError(event.error ?? 'Codex sidechat failed')
         void codexApi.readThread(event.threadId).then(snapshot => {
@@ -1364,6 +1410,7 @@ export function App() {
         return
       }
       if (event.type === 'error') {
+        flushSidechatDeltas()
         setSidechatRunning(false)
         setSidechatTurnId(undefined)
         setSidechatError(event.message)
@@ -1424,7 +1471,7 @@ export function App() {
       setCodexTurnId(undefined)
       setActionError(tr(`Codex CLI: ${event.message}`, `Codex CLI：${event.message}`))
     }
-  }), [drainCodexQueue, flushCodexDeltas, queueCodexDelta, tr])
+  }), [drainCodexQueue, flushCodexDeltas, flushSidechatDeltas, queueCodexDelta, queueSidechatDelta, tr])
 
   useEffect(() => subscribeAntigravity((event: AntigravityEvent) => {
     const sessionId = event.sessionId
@@ -1436,14 +1483,16 @@ export function App() {
         return
       }
       if (event.type === 'assistant-delta' || event.type === 'reasoning-delta') {
-        setSidechatMessages(current => applyCodexDeltas(current, [event], Date.now(), { idPrefix: 'antigravity', agent: 'Antigravity' }))
+        queueSidechatDelta(sessionId, 'antigravity', event)
         return
       }
       if (event.type === 'tool-item') {
+        flushSidechatDeltas()
         setSidechatMessages(current => applyCodexToolEvent(current, event, Date.now(), { idPrefix: 'antigravity', agent: 'Antigravity' }))
         return
       }
       if (event.type === 'turn-completed') {
+        flushSidechatDeltas()
         setSidechatTurnId(undefined)
         if (event.status === 'failed') setSidechatError(event.error ?? 'Antigravity sidechat failed')
         void antigravityApi.readThread(event.threadId).then(snapshot => {
@@ -1454,6 +1503,7 @@ export function App() {
         return
       }
       if (event.type === 'error') {
+        flushSidechatDeltas()
         setSidechatRunning(false)
         setSidechatTurnId(undefined)
         setSidechatError(event.message)
@@ -1514,7 +1564,7 @@ export function App() {
       setAntigravityTurnId(undefined)
       setActionError(tr(`Antigravity CLI: ${event.message}`, `Antigravity CLI：${event.message}`))
     }
-  }), [drainAntigravityQueue, flushAntigravityDeltas, queueAntigravityDelta, tr])
+  }), [drainAntigravityQueue, flushAntigravityDeltas, flushSidechatDeltas, queueAntigravityDelta, queueSidechatDelta, tr])
 
   useEffect(() => {
     const ownerSessionId = subagentView?.childSessionId ?? selectedId
@@ -2908,19 +2958,31 @@ export function App() {
     else selectSession(existing.sessionId)
   }
 
-  const handleRenameSession = async (session: SessionSummary = selected as SessionSummary): Promise<void> => {
+  const handleRenameSession = (session: SessionSummary = selected as SessionSummary): void => {
     if (session === undefined || busy) return
-    const nextTitle = window.prompt('Rename session', titleOf(session))?.trim()
-    if (nextTitle === undefined || nextTitle === '' || nextTitle === titleOf(session)) return
+    setRenameDialogError(undefined)
+    setRenameDialog({ kind: 'session', id: session.sessionId, initialValue: titleOf(session) })
+  }
+
+  const handleRenameSubmit = async (nextTitle: string): Promise<void> => {
+    const target = renameDialog
+    if (target === undefined || renameDialogBusy || busy) return
+    setRenameDialogBusy(true)
+    setRenameDialogError(undefined)
     setBusy(true)
     try {
-      await harnessApi.renameSession(session.sessionId, nextTitle)
+      if (target.kind === 'session') await harnessApi.renameSession(target.id, nextTitle)
+      else await harnessApi.renameWorkspace(target.id, nextTitle)
       await refreshChrome()
-      if (session.sessionId === selectedId) await refreshSession(session.sessionId)
+      if (target.kind === 'session' && target.id === selectedId) await refreshSession(target.id)
+      setRenameDialog(undefined)
     } catch (reason) {
-      setActionError(tr(`Failed to rename session: ${errorText(reason)}`, `会话重命名失败：${errorText(reason)}`))
+      setRenameDialogError(target.kind === 'session'
+        ? tr(`Failed to rename session: ${errorText(reason)}`, `会话重命名失败：${errorText(reason)}`)
+        : tr(`Failed to rename workspace: ${errorText(reason)}`, `工作区重命名失败：${errorText(reason)}`))
     } finally {
       setBusy(false)
+      setRenameDialogBusy(false)
     }
   }
 
@@ -3051,7 +3113,7 @@ export function App() {
           return next
         })
       } else if (action === 'rename') {
-        await handleRenameSession(session)
+        handleRenameSession(session)
       } else if (action === 'archive') {
         await handleArchiveSession(session)
       } else if (action === 'delete') {
@@ -3094,17 +3156,8 @@ export function App() {
     const action = await desktop.showWorkspaceMenu()
     if (action === null) return
     if (action === 'rename') {
-      const title = window.prompt('Rename work folder', workspace.title)?.trim()
-      if (title === undefined || title === '' || title === workspace.title) return
-      setBusy(true)
-      try {
-        await harnessApi.renameWorkspace(workspace.workspaceId, title)
-        await refreshChrome()
-      } catch (reason) {
-        setActionError(tr(`Failed to rename workspace: ${errorText(reason)}`, `工作区重命名失败：${errorText(reason)}`))
-      } finally {
-        setBusy(false)
-      }
+      setRenameDialogError(undefined)
+      setRenameDialog({ kind: 'workspace', id: workspace.workspaceId, initialValue: workspace.title })
       return
     }
     if (action === 'remove') {
@@ -3396,6 +3449,9 @@ export function App() {
     setSettingsOpen(true)
   }, [])
 
+  openFolderShortcutRef.current = () => { void handleOpenFolder() }
+  newSessionShortcutRef.current = () => { void handleNew() }
+
   useEffect(() => {
     const shortcuts = (event: KeyboardEvent): void => {
       if (!(event.metaKey || event.ctrlKey)) return
@@ -3415,12 +3471,12 @@ export function App() {
         event.preventDefault()
         setCommandsOpen(false)
         setSettingsOpen(false)
-        void handleOpenFolder()
+        openFolderShortcutRef.current()
       } else if (key === 'n') {
         event.preventDefault()
         setCommandsOpen(false)
         setSettingsOpen(false)
-        void handleNew()
+        newSessionShortcutRef.current()
       } else if (key === 'b') {
         event.preventDefault()
         setSidebarExpanded(value => !value)
@@ -3434,7 +3490,7 @@ export function App() {
     }
     window.addEventListener('keydown', shortcuts)
     return () => window.removeEventListener('keydown', shortcuts)
-  })
+  }, [openPlugins, openSettings])
 
   useEffect(() => window.dshDesktop?.onOpenPlugins(openPlugins), [openPlugins])
   useEffect(() => window.dshDesktop?.onOpenSettings(openSettings), [openSettings])
@@ -3750,6 +3806,14 @@ export function App() {
           queue={activeQueue}
           onQueueAction={(itemId, action) => { void handleQueueAction(itemId, action) }}
           supportsSteer={!antigravityActive}
+          focusKey={conversationOwner}
+          focusAllowed={!pluginsOpen
+            && !onboardingOpen
+            && !settingsOpen
+            && !commandsOpen
+            && goalDialog === undefined
+            && renameDialog === undefined
+            && !terminalOpen}
         />
 
         {terminalOpen && (
@@ -3857,6 +3921,20 @@ export function App() {
         error={goalDialogError}
         onClose={() => { if (!goalDialogBusy) setGoalDialog(undefined) }}
         onSubmit={(objective, rounds) => { void handleGoalSubmit(objective, rounds) }}
+      />
+
+      <RenameDialog
+        open={renameDialog !== undefined}
+        kind={renameDialog?.kind ?? 'session'}
+        initialValue={renameDialog?.initialValue ?? ''}
+        busy={renameDialogBusy}
+        error={renameDialogError}
+        onClose={() => {
+          if (renameDialogBusy) return
+          setRenameDialog(undefined)
+          setRenameDialogError(undefined)
+        }}
+        onSubmit={value => { void handleRenameSubmit(value) }}
       />
 
       <PluginManager

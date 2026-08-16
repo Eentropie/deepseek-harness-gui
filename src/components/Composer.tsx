@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon } from './Icon.tsx'
 import { ProviderLogo } from './ProviderLogo.tsx'
 import { QueueDock } from './QueueDock.tsx'
@@ -31,6 +31,14 @@ interface ComposerProps {
   queue: QueueItem[]
   onQueueAction: (itemId: string, action: { kind: 'remove' | 'steer' } | { kind: 'edit'; text: string }) => void
   supportsSteer?: boolean
+  focusKey?: string
+  focusAllowed?: boolean
+}
+
+export function hasExternalEditableFocus(activeElement: Element | null, composerRoot: HTMLElement | null): boolean {
+  if (activeElement === null || composerRoot === null || composerRoot.contains(activeElement)) return false
+  return activeElement.matches('input, textarea, select, [contenteditable]:not([contenteditable="false"])')
+    || activeElement.closest('[role="dialog"], [aria-modal="true"]') !== null
 }
 
 export function Composer({
@@ -60,8 +68,11 @@ export function Composer({
   queue,
   onQueueAction,
   supportsSteer = true,
+  focusKey = 'main',
+  focusAllowed = true,
 }: ComposerProps) {
   const composing = useRef(false)
+  const composerRoot = useRef<HTMLDivElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const textarea = useRef<HTMLTextAreaElement>(null)
   const [deliveryMenuOpen, setDeliveryMenuOpen] = useState(false)
@@ -75,18 +86,45 @@ export function Composer({
   const assistantName = models?.current.provider === 'antigravity-cli' ? 'Antigravity' : models?.current.provider === 'codex-cli' ? 'Codex' : 'DeepSeek'
   const webProvider = models?.current.provider === 'antigravity-cli' ? 'Antigravity' : models?.current.provider === 'codex-cli' ? 'Codex' : 'Host'
 
+  const restoreInputFocus = useCallback((preserveExternalEditor = true): void => {
+    if (!focusAllowed || disabled || busy || !document.hasFocus()) return
+    if (preserveExternalEditor && hasExternalEditableFocus(document.activeElement, composerRoot.current)) return
+    textarea.current?.focus({ preventScroll: true })
+  }, [busy, disabled, focusAllowed])
+
   useEffect(() => {
     if (!running || busy) setDeliveryMenuOpen(false)
   }, [busy, running])
 
+  useEffect(() => {
+    let frame: number | undefined
+    const scheduleFocus = (): void => {
+      if (frame !== undefined) window.cancelAnimationFrame(frame)
+      frame = window.requestAnimationFrame(() => {
+        frame = undefined
+        restoreInputFocus()
+      })
+    }
+    scheduleFocus()
+    window.addEventListener('focus', scheduleFocus)
+    return () => {
+      window.removeEventListener('focus', scheduleFocus)
+      if (frame !== undefined) window.cancelAnimationFrame(frame)
+    }
+  }, [focusKey, restoreInputFocus])
+
   const submit = (mode: 'queue' | 'steer'): void => {
     setDeliveryMenuOpen(false)
-    if (canSend) onSend(mode)
-    else textarea.current?.focus()
+    if (canSend) {
+      onSend(mode)
+      restoreInputFocus(false)
+    } else {
+      restoreInputFocus(false)
+    }
   }
 
   return (
-    <div className="composer-seat">
+    <div className="composer-seat" ref={composerRoot}>
       {error !== undefined && <div className="composer-error">{error}</div>}
       <QueueDock items={queue} running={running} disabled={disabled || busy} onAction={onQueueAction} />
       <div
@@ -98,7 +136,7 @@ export function Composer({
           onAddFiles([...event.dataTransfer.files])
         }}
       >
-        <input ref={fileInput} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={event => { onAddFiles(Array.from(event.target.files ?? [])); event.target.value = '' }} />
+        <input ref={fileInput} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={event => { onAddFiles(Array.from(event.target.files ?? [])); event.target.value = ''; restoreInputFocus(false) }} />
         <textarea
           ref={textarea}
           value={value}
@@ -152,6 +190,7 @@ export function Composer({
                   onChange={event => {
                     const [provider = '', model = ''] = event.target.value.split('::')
                     onModel(provider, model)
+                    restoreInputFocus(false)
                   }}
                   disabled={busy}
                   aria-label="Model"
@@ -172,7 +211,7 @@ export function Composer({
                 <Icon name="brain" size={14} />
                 <select
                   value={models?.current.reasoningEffort ?? currentModel?.reasoning?.defaultEffort ?? ''}
-                  onChange={event => onEffort(event.target.value)}
+                  onChange={event => { onEffort(event.target.value); restoreInputFocus(false) }}
                   disabled={busy}
                   aria-label="Reasoning effort"
                 >
@@ -185,7 +224,7 @@ export function Composer({
               <label className="composer-select" title={running ? 'Permission preset · applies from the next approval boundary or turn' : 'Permission preset'}>
                 <select
                   value={permission}
-                  onChange={event => onPermission(event.target.value)}
+                  onChange={event => { onPermission(event.target.value); restoreInputFocus(false) }}
                   disabled={busy}
                   aria-label="Permission preset"
                 >
@@ -206,7 +245,7 @@ export function Composer({
               <Icon name="globe" size={14} />
               <select
                 value={networkMode}
-                onChange={event => onNetworkMode(event.target.value as NetworkMode)}
+                onChange={event => { onNetworkMode(event.target.value as NetworkMode); restoreInputFocus(false) }}
                 disabled={busy}
                 aria-label="Web access"
               >

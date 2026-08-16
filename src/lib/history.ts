@@ -479,7 +479,7 @@ export function conversationMessagesEqual(left: ConversationMessage, right: Conv
       return block.name === other.name && block.arguments === other.arguments && block.callId === other.callId
         && block.status === other.status && block.result === other.result
         && block.startedAt === other.startedAt && block.finishedAt === other.finishedAt
-        && JSON.stringify(block.view) === JSON.stringify(other.view)
+        && (block.view === other.view || JSON.stringify(block.view) === JSON.stringify(other.view))
     }
     if (block.kind === 'image' && other.kind === 'image') {
       return block.label === other.label && block.attachmentId === other.attachmentId

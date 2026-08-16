@@ -1,6 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Icon } from './Icon.tsx'
-import { Markdown } from './Markdown.tsx'
+import { Markdown, StreamingMarkdown } from './Markdown.tsx'
 import { ProviderLogo } from './ProviderLogo.tsx'
 import { WhaleLogo } from './WhaleLogo.tsx'
 import { conversationMessagesEqual } from '../lib/history.ts'
@@ -119,18 +119,18 @@ function ThoughtDetails({ active, children }: { active: boolean; children: React
 }
 
 function ProcessContent({ block, active }: { block: ProcessBlock; active: boolean }) {
-  if (block.kind === 'text' || block.kind === 'reasoning') return <Markdown>{block.text}</Markdown>
+  if (block.kind === 'text' || block.kind === 'reasoning') return <StreamingMarkdown active={active}>{block.text}</StreamingMarkdown>
   return <RenderBlock block={block} active={active} />
 }
 
 function RenderBlock({ block, active = false }: { block: MessageBlock; active?: boolean }) {
   switch (block.kind) {
     case 'text':
-      return <Markdown>{stripAgentRoomDirective(block.text)}</Markdown>
+      return <StreamingMarkdown active={active}>{stripAgentRoomDirective(block.text)}</StreamingMarkdown>
     case 'reasoning':
       return (
         <ThoughtDetails active={active}>
-          <div className="reasoning-body"><Markdown>{block.text}</Markdown></div>
+          <div className="reasoning-body"><StreamingMarkdown active={active}>{block.text}</StreamingMarkdown></div>
         </ThoughtDetails>
       )
     case 'thought':

@@ -92,19 +92,105 @@ export function visibleProviderBlocks(blocks: MessageBlock[]): MessageBlock[] {
   return visible
 }
 
+type TranscriptProvider = 'deepseek' | 'codex' | 'antigravity'
+
+function compareMessages(left: ConversationMessage, right: ConversationMessage): number {
+  return left.time - right.time || left.seq - right.seq
+}
+
+function ordered(messages: readonly ConversationMessage[]): boolean {
+  for (let index = 1; index < messages.length; index += 1) {
+    const previous = messages[index - 1]
+    const current = messages[index]
+    if (previous !== undefined && current !== undefined && compareMessages(previous, current) > 0) return false
+  }
+  return true
+}
+
+function sameSource(left: ConversationMessage[], right: ConversationMessage[]): boolean {
+  return left === right || (left.length === 0 && right.length === 0)
+}
+
+function mergeChronologically(sources: readonly ConversationMessage[][]): ConversationMessage[] {
+  const populated = sources.filter(source => source.length > 0)
+  if (populated.length === 0) return []
+  if (populated.length === 1) return populated[0] ?? []
+  if (!populated.every(ordered)) return populated.flat().sort(compareMessages)
+  const indexes = populated.map(() => 0)
+  const output: ConversationMessage[] = []
+  while (true) {
+    let selected = -1
+    for (let sourceIndex = 0; sourceIndex < populated.length; sourceIndex += 1) {
+      const candidate = populated[sourceIndex]?.[indexes[sourceIndex] ?? 0]
+      if (candidate === undefined) continue
+      const current = selected < 0 ? undefined : populated[selected]?.[indexes[selected] ?? 0]
+      if (current === undefined || compareMessages(candidate, current) < 0) selected = sourceIndex
+    }
+    if (selected < 0) return output
+    const message = populated[selected]?.[indexes[selected] ?? 0]
+    if (message !== undefined) output.push(message)
+    indexes[selected] = (indexes[selected] ?? 0) + 1
+  }
+}
+
+/**
+ * Retains namespaced message objects and the final merged array across renders.
+ * Streaming normally replaces only the active tail message, so settled messages
+ * no longer pay for repeated object spreads or an O(N log N) full sort.
+ */
+export class ProviderTranscriptMerger {
+  private readonly arrays: Record<TranscriptProvider, WeakMap<ConversationMessage[], ConversationMessage[]>> = {
+    deepseek: new WeakMap(),
+    codex: new WeakMap(),
+    antigravity: new WeakMap(),
+  }
+  private readonly messages: Record<TranscriptProvider, WeakMap<ConversationMessage, ConversationMessage>> = {
+    deepseek: new WeakMap(),
+    codex: new WeakMap(),
+    antigravity: new WeakMap(),
+  }
+  private previous?: {
+    deepSeek: ConversationMessage[]
+    codex: ConversationMessage[]
+    antigravity: ConversationMessage[]
+    output: ConversationMessage[]
+  }
+
+  private normalize(provider: TranscriptProvider, source: ConversationMessage[]): ConversationMessage[] {
+    const cached = this.arrays[provider].get(source)
+    if (cached !== undefined) return cached
+    const output = source.map(message => {
+      const retained = this.messages[provider].get(message)
+      if (retained !== undefined) return retained
+      const next: ConversationMessage = provider === 'deepseek'
+        ? { ...message, id: `deepseek:${message.id}`, ...(message.role === 'assistant' ? { agent: 'DeepSeek' } : {}) }
+        : provider === 'antigravity'
+          ? { ...message, id: `antigravity:${message.id}`, ...(message.role === 'assistant' ? { agent: 'Antigravity' } : {}) }
+          : { ...message, id: `codex:${message.id}` }
+      this.messages[provider].set(message, next)
+      return next
+    })
+    this.arrays[provider].set(source, output)
+    return output
+  }
+
+  merge(deepSeek: ConversationMessage[], codex: ConversationMessage[], antigravity: ConversationMessage[]): ConversationMessage[] {
+    const previous = this.previous
+    if (previous !== undefined && sameSource(previous.deepSeek, deepSeek) && sameSource(previous.codex, codex)
+      && sameSource(previous.antigravity, antigravity)) return previous.output
+    const output = mergeChronologically([
+      this.normalize('deepseek', deepSeek),
+      this.normalize('codex', codex),
+      this.normalize('antigravity', antigravity),
+    ])
+    this.previous = { deepSeek, codex, antigravity, output }
+    return output
+  }
+}
+
 /** Merge both provider transcripts while keeping backend-specific ids isolated. */
-export function mergeProviderTranscripts(
-  deepSeek: ConversationMessage[],
-  codex: ConversationMessage[],
-): ConversationMessage[] {
-  return [
-    ...deepSeek.map(message => ({
-      ...message,
-      id: `deepseek:${message.id}`,
-      ...(message.role === 'assistant' ? { agent: 'DeepSeek' as const } : {}),
-    })),
-    ...codex.map(message => ({ ...message, id: `codex:${message.id}` })),
-  ].sort((left, right) => left.time - right.time || left.seq - right.seq)
+export function mergeProviderTranscripts(deepSeek: ConversationMessage[], codex: ConversationMessage[]): ConversationMessage[] {
+  return new ProviderTranscriptMerger().merge(deepSeek, codex, [])
 }
 
 /** Merge all desktop providers while preserving each backend's id namespace. */
@@ -113,17 +199,5 @@ export function mergeAllProviderTranscripts(
   codex: ConversationMessage[],
   antigravity: ConversationMessage[],
 ): ConversationMessage[] {
-  return [
-    ...deepSeek.map(message => ({
-      ...message,
-      id: `deepseek:${message.id}`,
-      ...(message.role === 'assistant' ? { agent: 'DeepSeek' as const } : {}),
-    })),
-    ...codex.map(message => ({ ...message, id: `codex:${message.id}` })),
-    ...antigravity.map(message => ({
-      ...message,
-      id: `antigravity:${message.id}`,
-      ...(message.role === 'assistant' ? { agent: 'Antigravity' as const } : {}),
-    })),
-  ].sort((left, right) => left.time - right.time || left.seq - right.seq)
+  return new ProviderTranscriptMerger().merge(deepSeek, codex, antigravity)
 }

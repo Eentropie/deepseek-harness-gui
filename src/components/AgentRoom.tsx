@@ -78,6 +78,19 @@ interface ActiveRun {
 
 const sleep = (milliseconds: number): Promise<void> => new Promise(resolve => window.setTimeout(resolve, milliseconds))
 
+function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(message)), milliseconds)
+    promise.then(value => {
+      window.clearTimeout(timer)
+      resolve(value)
+    }, reason => {
+      window.clearTimeout(timer)
+      reject(reason)
+    })
+  })
+}
+
 function errorText(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason)
 }
@@ -90,11 +103,6 @@ function finalAssistantText(messages: ConversationMessage[]): string | undefined
     if (text !== '') return text
   }
   return undefined
-}
-
-function resolvedNetwork(mode: NetworkMode): 'off' | 'auto' {
-  if (mode !== 'ask') return mode
-  return window.confirm('Allow this Agent Room participant to use web search for the next round?') ? 'auto' : 'off'
 }
 
 function phaseLabel(phase: AgentRoomSnapshot['phase']): string {
@@ -137,6 +145,7 @@ export function AgentRoom({
   const stopped = useRef(false)
   const activeRuns = useRef(new Map<string, ActiveRun>())
   const activeParent = useRef(parentSessionId)
+  const roundNetworkDecision = useRef<'off' | 'auto'>('off')
 
   const commitRoom = useCallback((update: (current: AgentRoomSnapshot) => AgentRoomSnapshot): AgentRoomSnapshot => {
     if (activeParent.current !== parentSessionId) return roomRef.current
@@ -199,6 +208,18 @@ export function AgentRoom({
   const selectedGroup = draft === undefined ? undefined : groups.find(group => group.id === draft.provider)
   const selectedModel = selectedGroup?.models.find(model => model.id === draft?.model)
   const selectedPermissions = draft === undefined ? [] : agentPermissionChoices(draft.provider, hostPermission)
+
+  const prepareNetworkRound = useCallback((agents: AgentRoomAgent[]): void => {
+    roundNetworkDecision.current = agents.some(agent => agent.network === 'ask')
+      && window.confirm(tr(
+        'Allow Agent Room participants configured as Ask to use web search for this round?',
+        '允许本轮中设为“每轮询问”的 Agent 使用联网搜索吗？',
+      ))
+      ? 'auto'
+      : 'off'
+  }, [tr])
+
+  const networkForAgent = useCallback((mode: NetworkMode): 'off' | 'auto' => mode === 'ask' ? roundNetworkDecision.current : mode, [])
 
   useEffect(() => {
     if (parentSessionId === undefined) return
@@ -338,16 +359,13 @@ export function AgentRoom({
         model: agent.model,
         effort: agent.effort,
         permission: agent.permission,
-        network: resolvedNetwork(agent.network),
+        network: networkForAgent(agent.network),
         prompt,
       })
       activeRuns.current.set(agent.id, { kind: 'codex', threadId: result.threadId, turnId: result.turnId })
       updateAgent(agent.id, { codexThreadId: result.threadId, runtimeCwd, isolated: runtimeCwd !== cwd })
       if (completed === undefined && failed === undefined) {
-        await Promise.race([
-          signal,
-          sleep(10 * 60_000).then(() => { throw new Error('Codex agent timed out after 10 minutes') }),
-        ])
+        await withTimeout(signal, 10 * 60_000, 'Codex agent timed out after 10 minutes')
       }
       if (failed !== undefined) throw failed
       if (completed?.status !== 'completed') throw new Error(completed?.error ?? `Codex agent ${completed?.status ?? 'stopped'}`)
@@ -382,7 +400,7 @@ export function AgentRoom({
       const permission = agent.permission as AntigravityPermissionMode
       const effort = agent.effort
       updateAgent(agent.id, { effectivePermission: permission })
-      const network = resolvedNetwork(agent.network)
+      const network = networkForAgent(agent.network)
       const start = (conversationId?: string) => antigravityApi.prompt({
         sessionId: owner,
         ...(conversationId === undefined ? {} : { conversationId }),
@@ -411,10 +429,7 @@ export function AgentRoom({
       activeRuns.current.set(agent.id, { kind: 'antigravity', threadId: result.conversationId, turnId: result.turnId })
       updateAgent(agent.id, { antigravityConversationId: result.conversationId, runtimeCwd, isolated: runtimeCwd !== cwd })
       if (completed === undefined && failed === undefined) {
-        await Promise.race([
-          signal,
-          sleep(10 * 60_000).then(() => { throw new Error('Antigravity agent timed out after 10 minutes') }),
-        ])
+        await withTimeout(signal, 10 * 60_000, 'Antigravity agent timed out after 10 minutes')
       }
       if (failed !== undefined) throw failed
       if (completed?.status !== 'completed') throw new Error(completed?.error ?? `Antigravity agent ${completed?.status ?? 'stopped'}`)
@@ -447,7 +462,7 @@ export function AgentRoom({
       updateAgent(agent.id, { permission: effectivePermission, effectivePermission })
       const baseline = projectConversation((await harnessApi.history(sessionId)).events).filter(message => message.role === 'assistant').length
       await harnessApi.prompt(sessionId, [
-        { type: 'text', text: deepSeekNetworkPolicy(resolvedNetwork(agent.network)) },
+        { type: 'text', text: deepSeekNetworkPolicy(networkForAgent(agent.network)) },
         { type: 'text', text: prompt },
       ])
       let messages: ConversationMessage[] = []
@@ -521,6 +536,7 @@ export function AgentRoom({
     setNotice(undefined)
     commitRoom(current => ({ ...current, running: true, phase: 'independent', artifacts: [], finalOutput: undefined }))
     try {
+      prepareNetworkRound(participants)
       const independent = await Promise.all(participants.map(async agent => ({
         agent,
         output: await executeAgent(agent, independentAuditPrompt(startingRoom.task, agent, roomRef.current.context), 'independent'),
@@ -528,6 +544,7 @@ export function AgentRoom({
       if (stopped.current) throw new Error('Agent Room stopped')
 
       commitRoom(current => ({ ...current, phase: 'rebuttal' }))
+      prepareNetworkRound(participants)
       const rebuttals = await Promise.all(participants.map(async agent => ({
         agent,
         output: await executeAgent(agent, rebuttalPrompt(startingRoom.task, agent, independent
@@ -541,6 +558,7 @@ export function AgentRoom({
         ...independent.map(item => ({ agent: item.agent.label, phase: 'independent' as const, output: item.output })),
         ...rebuttals.map(item => ({ agent: item.agent.label, phase: 'rebuttal' as const, output: item.output })),
       ]
+      prepareNetworkRound([judge])
       const finalOutput = await executeAgent(judge, judgmentPrompt(startingRoom.task, evidence), 'judgment')
       const completed = commitRoom(current => ({ ...current, running: false, phase: 'completed', finalOutput, reportStatus: 'pending' }))
       await onDeliverReport(agentRoomReport(completed), parentSessionId)
@@ -579,14 +597,17 @@ export function AgentRoom({
     setError(undefined)
     commitRoom(current => ({ ...current, running: true, phase: 'independent' }))
     try {
+      prepareNetworkRound(agents)
       const answers = await Promise.all(agents.map(async agent => ({
         agent,
         output: await executeAgent(agent, roomFollowupPrompt(currentTask(), body, agent, roomRef.current.finalOutput, roomRef.current.context), 'independent'),
       })))
       const judge = roomRef.current.agents.find(agent => agent.role === 'judge') ?? answers[0]!.agent
-      const finalOutput = answers.length === 1
-        ? answers[0]!.output
-        : await executeAgent(judge, judgmentPrompt(`${currentTask()}\n\nFollow-up: ${body}`, answers.map(item => ({ agent: item.agent.label, phase: 'independent', output: item.output }))), 'judgment')
+      let finalOutput = answers[0]!.output
+      if (answers.length > 1) {
+        prepareNetworkRound([judge])
+        finalOutput = await executeAgent(judge, judgmentPrompt(`${currentTask()}\n\nFollow-up: ${body}`, answers.map(item => ({ agent: item.agent.label, phase: 'independent', output: item.output }))), 'judgment')
+      }
       const completed = commitRoom(current => ({ ...current, running: false, phase: 'completed', finalOutput, reportStatus: 'pending' }))
       if (parentSessionId === undefined) throw new Error('The parent session is unavailable')
       await onDeliverReport(agentRoomReport(completed), parentSessionId)

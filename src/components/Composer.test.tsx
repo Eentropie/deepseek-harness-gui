@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { Composer } from './Composer.tsx'
+import { Composer, hasExternalEditableFocus } from './Composer.tsx'
 
 const noop = (): void => undefined
 
@@ -126,5 +126,32 @@ describe('Composer send control', () => {
     expect(markup).toContain('aria-label="Choose message delivery"')
     expect(markup).toContain('Enter to queue')
     expect(markup).toContain('Enter to send now')
+  })
+})
+
+describe('Composer focus ownership', () => {
+  const inside = {} as Element
+  const root = {
+    contains: (candidate: Element) => candidate === inside,
+  } as unknown as HTMLElement
+
+  it('does not treat controls inside the main composer as competing editors', () => {
+    expect(hasExternalEditableFocus(inside, root)).toBe(false)
+  })
+
+  it('preserves focus in an editor outside the main composer', () => {
+    const externalTextarea = {
+      matches: (selector: string) => selector.includes('textarea'),
+      closest: () => null,
+    } as unknown as Element
+    expect(hasExternalEditableFocus(externalTextarea, root)).toBe(true)
+  })
+
+  it('does not steal focus from a modal even when its active control is a button', () => {
+    const modalButton = {
+      matches: () => false,
+      closest: (selector: string) => selector.includes('[role="dialog"]') ? {} : null,
+    } as unknown as Element
+    expect(hasExternalEditableFocus(modalButton, root)).toBe(true)
   })
 })

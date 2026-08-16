@@ -1,5 +1,5 @@
 import { isValidElement, memo, useState, type ReactNode } from 'react'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Icon } from './Icon.tsx'
 
@@ -52,26 +52,63 @@ function CodeBlock({ children }: { children: ReactNode }) {
   )
 }
 
+const REMARK_PLUGINS = [remarkGfm]
+
+const MARKDOWN_COMPONENTS: Components = {
+  a: ({ href, children: label }) => (
+    <a href={href} target="_blank" rel="noreferrer">{label}</a>
+  ),
+  pre: ({ children: value }) => <CodeBlock>{value}</CodeBlock>,
+  code: ({ className, children: value }) => {
+    const multiline = className !== undefined || String(value).includes('\n')
+    return multiline
+      ? <code className={className}>{value}</code>
+      : <code className="inline-code">{value}</code>
+  },
+}
+
+/** Split only completed top-level Markdown blocks, never the body of a fence. */
+export function streamingMarkdownChunks(value: string): string[] {
+  if (value.length < 1_200) return [value]
+  const chunks: string[] = []
+  let chunkStart = 0
+  let cursor = 0
+  let fence: { marker: string; length: number } | undefined
+  while (cursor < value.length) {
+    const newline = value.indexOf('\n', cursor)
+    const lineEnd = newline < 0 ? value.length : newline + 1
+    const line = value.slice(cursor, lineEnd)
+    const marker = line.trimStart().match(/^(`{3,}|~{3,})/)?.[1]
+    if (marker !== undefined) {
+      if (fence === undefined) fence = { marker: marker[0] ?? '`', length: marker.length }
+      else if (marker[0] === fence.marker && marker.length >= fence.length) fence = undefined
+    }
+    if (fence === undefined && /^\s*$/.test(line) && lineEnd < value.length) {
+      chunks.push(value.slice(chunkStart, lineEnd))
+      chunkStart = lineEnd
+    }
+    cursor = lineEnd
+  }
+  if (chunkStart < value.length) chunks.push(value.slice(chunkStart))
+  return chunks.length === 0 ? [value] : chunks
+}
+
 export const Markdown = memo(function Markdown({ children }: MarkdownProps) {
   return (
     <div className="markdown">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a: ({ href, children: label }) => (
-            <a href={href} target="_blank" rel="noreferrer">{label}</a>
-          ),
-          pre: ({ children: value }) => <CodeBlock>{value}</CodeBlock>,
-          code: ({ className, children: value }) => {
-            const multiline = className !== undefined || String(value).includes('\n')
-            return multiline
-              ? <code className={className}>{value}</code>
-              : <code className="inline-code">{value}</code>
-          },
-        }}
+        remarkPlugins={REMARK_PLUGINS}
+        components={MARKDOWN_COMPONENTS}
       >
         {children}
       </ReactMarkdown>
     </div>
   )
+})
+
+export const StreamingMarkdown = memo(function StreamingMarkdown({ children, active }: MarkdownProps & { active: boolean }) {
+  if (!active) return <Markdown>{children}</Markdown>
+  const chunks = streamingMarkdownChunks(children)
+  if (chunks.length === 1) return <Markdown>{children}</Markdown>
+  return <div className="streaming-markdown">{chunks.map((chunk, index) => <Markdown key={index}>{chunk}</Markdown>)}</div>
 })

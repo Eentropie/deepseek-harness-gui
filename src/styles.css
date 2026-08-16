@@ -1348,6 +1348,8 @@ a:focus-visible {
   display: flex;
   align-items: flex-start;
   gap: 12px;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 180px;
 }
 
 .message[data-role='user'] {
@@ -1491,6 +1493,8 @@ a:focus-visible {
   overflow-wrap: anywhere;
   word-break: break-word;
 }
+
+.streaming-markdown > .markdown + .markdown { margin-top: 0.82em; }
 
 .markdown > :first-child {
   margin-top: 0;
@@ -4208,6 +4212,9 @@ a:focus-visible {
 .goal-dialog > footer button { min-height: 29px; padding: 0 10px; border: 1px solid var(--border); border-radius: 7px; color: var(--ink-soft); background: var(--surface); font-size: 9px; }
 .goal-dialog > footer button.primary { border-color: var(--ink); color: var(--main); background: var(--ink); }
 .goal-dialog > footer button:disabled { opacity: 0.38; }
+
+.rename-dialog { width: min(420px, calc(100vw - 32px)); }
+.rename-dialog > label { margin-bottom: 2px; }
 
 .inspector-section {
   padding: 17px 0;

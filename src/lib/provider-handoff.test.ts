@@ -5,6 +5,7 @@ import {
   isProviderHandoffText,
   mergeAllProviderTranscripts,
   mergeProviderTranscripts,
+  ProviderTranscriptMerger,
   providerHandoffText,
   visibleProviderText,
 } from './provider-handoff.ts'
@@ -62,6 +63,20 @@ describe('provider handoff', () => {
   it('keeps Antigravity isolated in the unified transcript', () => {
     const merged = mergeAllProviderTranscripts([], [], [{ ...message(1, 'assistant', 'Gemini answer', 15), agent: 'Antigravity' }])
     expect(merged.map(item => [item.id, item.agent])).toEqual([['antigravity:1', 'Antigravity']])
+  })
+
+  it('retains settled namespaced messages and the complete result for unchanged inputs', () => {
+    const merger = new ProviderTranscriptMerger()
+    const deepSeek = [message(1, 'assistant', 'DeepSeek answer', 10)]
+    const codex = [message(1, 'assistant', 'Codex answer', 20)]
+    const first = merger.merge(deepSeek, codex, [])
+    expect(merger.merge(deepSeek, codex, [])).toBe(first)
+
+    const nextCodex = [codex[0]!, message(2, 'assistant', 'Streaming tail', 30)]
+    const second = merger.merge(deepSeek, nextCodex, [])
+    expect(second[0]).toBe(first[0])
+    expect(second[1]).toBe(first[1])
+    expect(second.map(item => item.id)).toEqual(['deepseek:1', 'codex:1', 'codex:2'])
   })
 
   it('keeps renderer-only network policy messages out of visible chat', () => {
