@@ -690,6 +690,10 @@ a:focus-visible {
   transition: background 100ms ease, color 100ms ease;
 }
 
+.group-heading + .session-row {
+  margin-top: 5px;
+}
+
 .session-row:hover {
   color: var(--ink);
   background: var(--surface-hover);
