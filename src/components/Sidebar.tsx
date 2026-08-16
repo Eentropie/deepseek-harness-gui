@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Icon } from './Icon.tsx'
 import { WhaleLogo } from './WhaleLogo.tsx'
 import { shortcutLabel } from '../lib/platform.ts'
@@ -98,6 +98,8 @@ export function Sidebar({
   const pluginShortcut = shortcutLabel('P', true)
   const settingsShortcut = shortcutLabel(',')
   const [query, setQuery] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const searchInput = useRef<HTMLInputElement>(null)
   const [closedGroups, setClosedGroups] = useState<Set<string>>(new Set())
   const [dragging, setDragging] = useState<DragPayload>()
   const [dropTarget, setDropTarget] = useState<string>()
@@ -118,6 +120,25 @@ export function Sidebar({
     const timer = window.setTimeout(() => onSearch(query.trim()), query.trim() === '' ? 0 : 220)
     return () => window.clearTimeout(timer)
   }, [onSearch, query])
+  useEffect(() => {
+    if (!searchOpen || collapsed) return
+    const frame = window.requestAnimationFrame(() => searchInput.current?.focus())
+    return () => window.cancelAnimationFrame(frame)
+  }, [collapsed, searchOpen])
+
+  const closeSearch = (): void => {
+    setSearchOpen(false)
+    setQuery('')
+  }
+
+  const toggleSearch = (): void => {
+    if (searchOpen && !collapsed) {
+      closeSearch()
+      return
+    }
+    if (collapsed) onToggle()
+    setSearchOpen(true)
+  }
   const visible = (session: SessionSummary): boolean => {
     if (normalized === '') return true
     if (hitIds.has(session.sessionId)) return true
@@ -149,7 +170,10 @@ export function Sidebar({
       data-archived={archived}
       data-dragging={dragging?.kind === 'session' && dragging.id === session.sessionId}
       data-drop-target={dropTarget === `session:${session.sessionId}`}
-      onClick={() => onSelect(session.sessionId)}
+      onClick={() => {
+        onSelect(session.sessionId)
+        if (searchOpen) closeSearch()
+      }}
       onDoubleClick={event => { event.preventDefault(); onSessionMenu(session) }}
       onContextMenu={event => { event.preventDefault(); onSessionMenu(session) }}
       onDragStart={event => {
@@ -204,7 +228,7 @@ export function Sidebar({
     <aside className="sidebar" data-collapsed={collapsed} aria-label={tr('Sessions', '会话')}>
       <div className="brand-row">
         <div className="brand-mark" title="DeepSeek Harness">
-          <WhaleLogo size={collapsed ? 26 : 29} />
+          <WhaleLogo size={collapsed ? 25 : 27} />
         </div>
         {!collapsed && (
           <div className="brand-copy">
@@ -236,16 +260,34 @@ export function Sidebar({
         {!collapsed && <kbd>{openFolderShortcut}</kbd>}
       </button>
 
-      {!collapsed && (
-        <label className="search-box">
+      <button
+        type="button"
+        className="search-sessions"
+        data-active={searchOpen}
+        onClick={toggleSearch}
+        title={tr('Search conversations', '搜索对话')}
+        aria-expanded={searchOpen && !collapsed}
+      >
+        <Icon name="search" size={15} />
+        {!collapsed && <span>{tr('Search conversations', '搜索对话')}</span>}
+        {!collapsed && <Icon name={searchOpen ? 'x' : 'chevron-right'} size={12} />}
+      </button>
+
+      {!collapsed && searchOpen && (
+        <div className="search-box">
           <Icon name="search" size={15} />
           <input
+            ref={searchInput}
             value={query}
             onChange={event => setQuery(event.target.value)}
-            placeholder={tr('Search sessions', '搜索会话')}
-            aria-label={tr('Search sessions', '搜索会话')}
+            onKeyDown={event => {
+              if (event.key === 'Escape') closeSearch()
+            }}
+            placeholder={tr('Search conversations…', '搜索对话…')}
+            aria-label={tr('Search conversations', '搜索对话')}
           />
-        </label>
+          {query !== '' && <button type="button" onClick={() => setQuery('')} aria-label={tr('Clear search', '清除搜索')}><Icon name="x" size={11} /></button>}
+        </div>
       )}
 
       <div className="sidebar-scroll">

@@ -54,4 +54,37 @@ describe('Sidebar archived sessions', () => {
     expect(markup).not.toContain('archived-preset')
     expect(markup).not.toContain('deleted-preset')
   })
+
+  it('uses a compact button to open conversation search', () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'en', setItem: noop })
+    const markup = renderToStaticMarkup(
+      <I18nProvider><Sidebar
+        sessions={sessions}
+        workspaces={workspaces}
+        archivedSessionIds={[]}
+        pinnedSessionIds={new Set()}
+        unreadSessionIds={new Set()}
+        deletedSessionIds={new Set()}
+        collapsed={false}
+        onSelect={noop}
+        onNew={noop}
+        onOpenFolder={noop}
+        onWorkspace={noop}
+        onToggle={noop}
+        onPlugins={noop}
+        onSettings={noop}
+        searchHits={[]}
+        searching={false}
+        onSearch={noop}
+        onSessionMenu={noop}
+        onWorkspaceMenu={noop}
+        onMoveWorkspace={noop}
+        onMoveSession={noop}
+      /></I18nProvider>,
+    )
+
+    expect(markup).toContain('class="search-sessions"')
+    expect(markup).toContain('Search conversations')
+    expect(markup).not.toContain('class="search-box"')
+  })
 })

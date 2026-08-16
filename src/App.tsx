@@ -7,6 +7,7 @@ import { Icon } from './components/Icon.tsx'
 import { Inspector } from './components/Inspector.tsx'
 import type { AgentRoomRequest } from './components/AgentRoom.tsx'
 import type { QuestionAnswer } from './components/InteractionPanel.tsx'
+import { InteractionDock } from './components/InteractionDock.tsx'
 import { JobDock } from './components/JobDock.tsx'
 import { OnboardingWizard } from './components/OnboardingWizard.tsx'
 import { PluginManager } from './components/PluginManager.tsx'
@@ -1004,10 +1005,6 @@ export function App() {
     writeSidechatSelection(sidechatOwner, next)
     setSidechatSelection(next)
   }, [activeSidechatId, antigravityPermission, codexPermission, networkMode, permissions?.options, presentedModels, presentedPermission, selectedId, sidechatOwner])
-
-  useEffect(() => {
-    if (pendingApprovals.length + pendingQuestions.length > 0) setInspectorOpen(true)
-  }, [pendingApprovals.length, pendingQuestions.length])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -3777,6 +3774,13 @@ export function App() {
           onUseSuggestion={setDraft}
         />
 
+        <InteractionDock
+          approvals={pendingApprovals}
+          questions={pendingQuestions}
+          onApproval={(request, outcome) => { void handleApproval(request, outcome) }}
+          onQuestion={(request, answers) => { void handleQuestion(request, answers) }}
+        />
+
         <Composer
           value={draft}
           onChange={setDraft}
@@ -3806,7 +3810,7 @@ export function App() {
           queue={activeQueue}
           onQueueAction={(itemId, action) => { void handleQueueAction(itemId, action) }}
           supportsSteer={!antigravityActive}
-          focusKey={conversationOwner}
+          focusKey={`${conversationOwner}:${pendingApprovals.length}:${pendingQuestions.length}`}
           focusAllowed={!pluginsOpen
             && !onboardingOpen
             && !settingsOpen
@@ -3835,8 +3839,6 @@ export function App() {
           skills={skills}
           subagents={subagents}
           subagentView={subagentView === undefined ? undefined : { id: subagentView.childSessionId, label: subagentView.label }}
-          approvals={pendingApprovals}
-          questions={pendingQuestions}
           parentMessages={activeMessages}
           hostPermission={permissions?.currentValue ?? pendingHostPermission}
           effectivePermission={antigravityActive
@@ -3860,8 +3862,6 @@ export function App() {
           onUseSkill={name => setDraft(current => `${current}${current === '' ? '' : ' '}/${name} `)}
           onOpenSubagent={handleOpenSubagent}
           onExitSubagent={() => { setSubagentView(undefined) }}
-          onApproval={(request, outcome) => { void handleApproval(request, outcome) }}
-          onQuestion={(request, answers) => { void handleQuestion(request, answers) }}
           onSidechatSend={text => { void handleSidechatSend(text) }}
           onSidechatStop={() => { void handleSidechatStop() }}
           onSidechatNew={handleNewSidechat}

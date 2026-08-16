@@ -1,18 +1,15 @@
 import { useEffect, useState } from 'react'
 import { Icon } from './Icon.tsx'
 import { ProviderLogo } from './ProviderLogo.tsx'
-import { InteractionPanel, type QuestionAnswer } from './InteractionPanel.tsx'
 import { ReviewPanel } from './ReviewPanel.tsx'
 import { SidechatPanel } from './SidechatPanel.tsx'
 import { AgentRoom, type AgentRoomRequest } from './AgentRoom.tsx'
 import { useI18n } from '../lib/i18n.tsx'
 import type { ActivityItem } from '../lib/history.ts'
 import type {
-  ApprovalRequest,
   ConversationMessage,
   GoalProjection,
   HostDescription,
-  QuestionRequest,
   SessionModels,
   SessionSummary,
   SkillEntry,
@@ -21,7 +18,6 @@ import type {
   WorkspaceSummary,
 } from '../lib/types.ts'
 import { platformBasename } from '../lib/platform.ts'
-import type { ApprovalChoice } from '../lib/approval.ts'
 
 type InspectorView = 'context' | 'review' | 'sidechat' | 'agents'
 
@@ -34,8 +30,6 @@ interface InspectorProps {
   skills: SkillEntry[]
   subagents?: SubagentCatalog
   subagentView?: { id: string; label: string }
-  approvals: ApprovalRequest[]
-  questions: QuestionRequest[]
   parentMessages: ConversationMessage[]
   hostPermission?: string
   effectivePermission?: string
@@ -57,8 +51,6 @@ interface InspectorProps {
   onUseSkill: (name: string) => void
   onOpenSubagent: (entry: Extract<SubagentEntry, { kind: 'child' }>) => void
   onExitSubagent: () => void
-  onApproval: (request: ApprovalRequest, outcome: ApprovalChoice) => void
-  onQuestion: (request: QuestionRequest, answers: QuestionAnswer[]) => void
   onSidechatSend: (text: string) => void
   onSidechatStop: () => void
   onSidechatNew: () => void
@@ -103,8 +95,6 @@ export function Inspector({
   skills,
   subagents,
   subagentView,
-  approvals,
-  questions,
   parentMessages,
   hostPermission,
   effectivePermission,
@@ -113,8 +103,6 @@ export function Inspector({
   onUseSkill,
   onOpenSubagent,
   onExitSubagent,
-  onApproval,
-  onQuestion,
   onSidechatSend,
   onSidechatStop,
   onSidechatNew,
@@ -135,7 +123,6 @@ export function Inspector({
 }: InspectorProps) {
   const { tr } = useI18n()
   const [view, setView] = useState<InspectorView>('context')
-  const reviewCount = approvals.length + questions.length
   const values = session?.projections?.values
   const pressure = values?.contextPressure
   const used = pressure?.projectedTokens ?? pressure?.pressureTokens ?? 0
@@ -145,10 +132,6 @@ export function Inspector({
   const stats = values?.sessionStats
   const runtimeProvider = models?.current.provider ?? host?.provider
   const runtimeModel = models?.current.model ?? host?.model
-
-  useEffect(() => {
-    if (reviewCount > 0) setView('review')
-  }, [reviewCount])
 
   useEffect(() => {
     if (agentRoomRequest !== undefined) setView('agents')
@@ -182,20 +165,13 @@ export function Inspector({
 
       <nav className="inspector-tabs" aria-label="Side panel views">
         <button type="button" data-active={view === 'context'} onClick={() => setView('context')} title={tr('Context', '上下文')}><Icon name="sliders" size={14} /><span>{tr('Context', '上下文')}</span></button>
-        <button type="button" data-active={view === 'review'} onClick={() => setView('review')} title={tr('Review', '审查')}><Icon name="document" size={14} /><span>{tr('Review', '审查')}</span>{reviewCount > 0 && <b>{reviewCount}</b>}</button>
+        <button type="button" data-active={view === 'review'} onClick={() => setView('review')} title={tr('Review', '审查')}><Icon name="document" size={14} /><span>{tr('Review', '审查')}</span></button>
         <button type="button" data-active={view === 'sidechat'} onClick={() => setView('sidechat')} title="Sidechat"><Icon name="sparkles" size={14} /><span>Sidechat</span></button>
         <button type="button" data-active={view === 'agents'} onClick={() => setView('agents')} title="Subagents"><Icon name="agent" size={14} /><span>Agents</span>{(subagents?.entries.length ?? 0) > 0 && <b>{subagents?.entries.length}</b>}</button>
       </nav>
 
       {view === 'review' && (
         <div className="inspector-scroll inspector-review">
-          <section className="review-approvals" data-empty={reviewCount === 0}>
-            <div className="review-heading"><strong>Approvals</strong><span>{reviewCount === 0 ? 'Nothing waiting' : `${reviewCount} waiting`}</span></div>
-            {reviewCount === 0 && <p><Icon name="check" size={12} /> No approvals waiting</p>}
-            {approvals[0] !== undefined && <InteractionPanel approval={approvals[0]} onApproval={onApproval} onQuestion={onQuestion} />}
-            {questions[0] !== undefined && <InteractionPanel question={questions[0]} onApproval={onApproval} onQuestion={onQuestion} />}
-            {reviewCount > 2 && <p className="review-more">{reviewCount - 2} more request{reviewCount - 2 === 1 ? '' : 's'} will follow.</p>}
-          </section>
           <ReviewPanel
             sessionId={session?.sessionId}
             cwd={workspace?.path ?? session?.cwd ?? host?.cwd}
