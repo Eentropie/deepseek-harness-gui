@@ -147,7 +147,9 @@ export function UsageBillingSettings({ active }: UsageBillingSettingsProps) {
         <header>
           <div className="billing-provider-icon chatgpt"><ProviderLogo provider="codex-cli" size={22} /></div>
           <div><span>CHATGPT ACCOUNT</span><strong>Codex CLI</strong></div>
-          <em data-state={codex?.available === true ? 'ready' : 'offline'}>{codex?.available === true ? titleCase(codex.planType ?? codex.accountType ?? 'Connected') : 'Unavailable'}</em>
+          <em data-state={codex?.available === true ? codex.stale === true ? 'warning' : 'ready' : 'offline'}>
+            {codex?.available === true ? codex.stale === true ? 'Refresh delayed' : titleCase(codex.planType ?? codex.accountType ?? 'Connected') : 'Unavailable'}
+          </em>
         </header>
         {codex === undefined ? (
           <div className="billing-loading">Reading the current Codex login…</div>
@@ -155,6 +157,12 @@ export function UsageBillingSettings({ active }: UsageBillingSettingsProps) {
           <div className="billing-message"><strong>Subscription limits unavailable</strong><span>{codex.error ?? 'Sign in with Codex CLI to read this account.'}</span></div>
         ) : (
           <>
+            {codex.warnings !== undefined && codex.warnings.length > 0 && (
+              <div className="billing-message compact warning">
+                <strong>Live usage refresh delayed</strong>
+                <span>{codex.warnings.join(' ')}</span>
+              </div>
+            )}
             <div className="usage-summary-grid">
               <div><span>Plan</span><strong>{titleCase(codex.planType ?? codex.accountType ?? 'Account')}</strong></div>
               <div><span>Lifetime tokens</span><strong>{compactNumber(codex.summary?.lifetimeTokens)}</strong></div>

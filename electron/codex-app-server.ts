@@ -74,6 +74,20 @@ function errorMessage(error: unknown): string {
   return String(error)
 }
 
+function usageFailureMessage(error: unknown): string {
+  const message = errorMessage(error)
+  if (/not signed in|unauthorized|authentication|\b401\b/i.test(message)) {
+    return 'Codex CLI is not signed in. Sign in again, then refresh.'
+  }
+  if (/timed out/i.test(message)) {
+    return 'Codex usage data took too long to respond. Refresh to try again.'
+  }
+  if (/sending request|network|connect|dns|fetch|socket|certificate|tls/i.test(message)) {
+    return 'ChatGPT usage data could not be reached. Check the connection or proxy, then refresh.'
+  }
+  return 'Codex usage data is temporarily unavailable. Refresh to try again.'
+}
+
 function turnError(params: Record<string, unknown>): string | undefined {
   const turn = record(params['turn'])
   const error = record(turn?.['error'])
@@ -93,6 +107,7 @@ export class CodexAppServer {
   private readonly sessionByThread = new Map<string, string>()
   private readonly incomingApprovals = new Map<string | number, string>()
   private catalogCache?: CodexCatalogModel[]
+  private usageCache?: CodexUsageSnapshot
   private stopping = false
 
   constructor(private readonly publish: (event: CodexEvent) => void) {}
@@ -115,20 +130,61 @@ export class CodexAppServer {
   async usage(): Promise<CodexUsageSnapshot> {
     try {
       await this.ensureStarted()
-      const [account, rateLimits, usage] = await Promise.all([
-        this.request('account/read', {}, 30_000),
-        this.request('account/rateLimits/read', null, 30_000),
-        this.request('account/usage/read', null, 30_000).catch(() => ({ summary: {}, dailyUsageBuckets: [] })),
+      const account = await this.request('account/read', {}, 45_000)
+      const [rateLimitsResult, activityResult] = await Promise.allSettled([
+        this.retryUsageRequest('account/rateLimits/read'),
+        this.retryUsageRequest('account/usage/read'),
       ])
-      return normalizeCodexUsage(account, rateLimits, usage)
+      const rateLimits = rateLimitsResult.status === 'fulfilled' ? rateLimitsResult.value : {}
+      const activity = activityResult.status === 'fulfilled' ? activityResult.value : {}
+      const fresh = normalizeCodexUsage(account, rateLimits, activity)
+      const warnings = [
+        ...(rateLimitsResult.status === 'rejected' ? [usageFailureMessage(rateLimitsResult.reason)] : []),
+        ...(activityResult.status === 'rejected' ? ['Codex token history could not be refreshed.'] : []),
+      ]
+      const snapshot: CodexUsageSnapshot = {
+        ...fresh,
+        rateLimits: rateLimitsResult.status === 'fulfilled'
+          ? fresh.rateLimits
+          : this.usageCache?.rateLimits ?? [],
+        dailyUsageBuckets: activityResult.status === 'fulfilled'
+          ? fresh.dailyUsageBuckets
+          : this.usageCache?.dailyUsageBuckets ?? [],
+        ...(activityResult.status === 'fulfilled'
+          ? fresh.summary === undefined ? {} : { summary: fresh.summary }
+          : this.usageCache?.summary === undefined ? {} : { summary: this.usageCache.summary }),
+        ...(warnings.length === 0 ? {} : { stale: true, warnings }),
+      }
+      if (rateLimitsResult.status === 'fulfilled' || activityResult.status === 'fulfilled') {
+        this.usageCache = snapshot
+      }
+      return snapshot
     } catch (reason) {
+      const error = usageFailureMessage(reason)
+      if (this.usageCache !== undefined && !/not signed in|unauthorized|authentication|\b401\b/i.test(errorMessage(reason))) {
+        return {
+          ...this.usageCache,
+          stale: true,
+          warnings: [error],
+          updatedAt: Date.now(),
+        }
+      }
       return {
         available: false,
         rateLimits: [],
         dailyUsageBuckets: [],
         updatedAt: Date.now(),
-        error: errorMessage(reason),
+        error,
       }
+    }
+  }
+
+  private async retryUsageRequest(method: 'account/rateLimits/read' | 'account/usage/read'): Promise<unknown> {
+    try {
+      return await this.request(method, null, 35_000)
+    } catch {
+      await new Promise(resolve => setTimeout(resolve, 400))
+      return this.request(method, null, 20_000)
     }
   }
 

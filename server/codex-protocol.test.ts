@@ -112,6 +112,23 @@ describe('Codex App Server protocol projection', () => {
     expect(JSON.stringify(usage)).not.toContain('private@example.com')
   })
 
+  it('keeps the signed-in account available when one usage source is temporarily missing', () => {
+    const usage = normalizeCodexUsage(
+      { account: { type: 'chatgpt', planType: 'pro' } },
+      {},
+      { dailyUsageBuckets: [{ startDate: '2026-08-16', tokens: 321 }] },
+      84,
+    )
+    expect(usage).toMatchObject({
+      available: true,
+      accountType: 'chatgpt',
+      planType: 'pro',
+      rateLimits: [],
+      dailyUsageBuckets: [{ startDate: '2026-08-16', tokens: 321 }],
+      updatedAt: 84,
+    })
+  })
+
   it('adds Homebrew to the packaged CLI launch path', () => {
     const environment = codexSpawnEnvironment('/opt/homebrew/bin/codex', { PATH: '/usr/bin:/bin' }, 'darwin')
     expect(environment['PATH']?.split(':').slice(0, 3)).toEqual([

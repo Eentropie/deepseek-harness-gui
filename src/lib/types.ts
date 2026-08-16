@@ -504,6 +504,8 @@ export interface CodexUsageSnapshot {
     longestRunningTurnSec?: number
   }
   updatedAt: number
+  stale?: boolean
+  warnings?: string[]
   error?: string
 }
 
