@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { billingApi, codexApi, harnessApi, subscribeCodex } from '../lib/api.ts'
-import type { CodexRateLimitWindow, CodexUsageSnapshot, CredentialView, DeepSeekBillingSnapshot } from '../lib/types.ts'
+import { antigravityApi, billingApi, codexApi, harnessApi, subscribeCodex } from '../lib/api.ts'
+import type { AntigravityCatalog, CodexRateLimitWindow, CodexUsageSnapshot, CredentialView, DeepSeekBillingSnapshot } from '../lib/types.ts'
 import { Icon } from './Icon.tsx'
 import { ProviderLogo } from './ProviderLogo.tsx'
 import { WhaleLogo } from './WhaleLogo.tsx'
@@ -59,6 +59,7 @@ function RateWindow({ label, window }: { label: string; window: CodexRateLimitWi
 export function UsageBillingSettings({ active }: UsageBillingSettingsProps) {
   const [codex, setCodex] = useState<CodexUsageSnapshot>()
   const [deepSeek, setDeepSeek] = useState<DeepSeekBillingSnapshot>()
+  const [antigravity, setAntigravity] = useState<AntigravityCatalog>()
   const [hostCredential, setHostCredential] = useState<CredentialView>()
   const [keyDraft, setKeyDraft] = useState('')
   const [loading, setLoading] = useState(false)
@@ -68,18 +69,22 @@ export function UsageBillingSettings({ active }: UsageBillingSettingsProps) {
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
     setFailure(undefined)
-    const [codexResult, deepSeekResult, hostResult] = await Promise.allSettled([
+    const [codexResult, deepSeekResult, hostResult, antigravityResult] = await Promise.allSettled([
       codexApi.usage(),
       billingApi.deepSeek(),
       harnessApi.describeCredentials(['DEEPSEEK_API_KEY']),
+      antigravityApi.catalog(true),
     ])
     if (codexResult.status === 'fulfilled') setCodex(codexResult.value)
     else setCodex({ available: false, rateLimits: [], dailyUsageBuckets: [], updatedAt: Date.now(), error: errorText(codexResult.reason) })
     if (deepSeekResult.status === 'fulfilled') setDeepSeek(deepSeekResult.value)
     else setDeepSeek({ configured: false, writable: false, balances: [], updatedAt: Date.now(), error: errorText(deepSeekResult.reason) })
     if (hostResult.status === 'fulfilled') setHostCredential(hostResult.value.credentials['DEEPSEEK_API_KEY'])
-    const rejected = [codexResult, deepSeekResult, hostResult].filter(result => result.status === 'rejected')
-    if (rejected.length === 3) setFailure('Usage and billing sources are currently unavailable.')
+    setAntigravity(antigravityResult.status === 'fulfilled'
+      ? antigravityResult.value
+      : { available: false, authenticatedWith: 'Google', models: [], error: errorText(antigravityResult.reason) })
+    const rejected = [codexResult, deepSeekResult, hostResult, antigravityResult].filter(result => result.status === 'rejected')
+    if (rejected.length === 4) setFailure('Usage and billing sources are currently unavailable.')
     setLoading(false)
   }, [])
 
@@ -189,6 +194,24 @@ export function UsageBillingSettings({ active }: UsageBillingSettingsProps) {
 
       <article className="billing-provider-card">
         <header>
+          <div className="billing-provider-icon"><ProviderLogo provider="antigravity-cli" name={antigravity?.models[0]?.name ?? 'Gemini'} size={22} /></div>
+          <div><span>GOOGLE ACCOUNT</span><strong>Antigravity CLI</strong></div>
+          <em data-state={antigravity?.available === true ? 'ready' : 'offline'}>{antigravity?.available === true ? 'Connected' : 'Unavailable'}</em>
+        </header>
+        {antigravity === undefined ? (
+          <div className="billing-loading">Reading the current Antigravity login…</div>
+        ) : !antigravity.available ? (
+          <div className="billing-message"><strong>Subscription status unavailable</strong><span>{antigravity.error ?? 'Open agy and complete Google sign-in.'}</span></div>
+        ) : (
+          <div className="billing-message compact">
+            <strong>{antigravity.models.length} subscription models available{antigravity.version === undefined ? '' : ` · CLI ${antigravity.version}`}</strong>
+            <span>Antigravity CLI does not currently expose a stable headless quota or balance endpoint, so this app does not fabricate a usage meter.</span>
+          </div>
+        )}
+      </article>
+
+      <article className="billing-provider-card">
+        <header>
           <div className="billing-provider-icon whale"><WhaleLogo size={22} /></div>
           <div><span>API ACCOUNT</span><strong>DeepSeek balance</strong></div>
           <em data-state={deepSeek?.balanceAvailable === true ? 'ready' : deepSeek?.configured === true ? 'warning' : 'offline'}>
@@ -241,7 +264,7 @@ export function UsageBillingSettings({ active }: UsageBillingSettingsProps) {
         </div>
       </article>
 
-      <div className="settings-note billing-boundary-note"><Icon name="lock" size={14} /><span>Codex data comes from the signed-in CLI account. DeepSeek exposes account balance, but detailed API-key usage is exported as CSV from its platform. Stored keys never enter the renderer or the local Harness Host.</span></div>
+      <div className="settings-note billing-boundary-note"><Icon name="lock" size={14} /><span>Codex data comes from the signed-in CLI account. Antigravity account connectivity is visible, but its CLI has no stable headless quota API. DeepSeek exposes account balance, while detailed API-key usage is exported as CSV. Stored keys never enter the renderer or the local Harness Host.</span></div>
     </section>
   )
 }

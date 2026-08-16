@@ -11,10 +11,12 @@ describe('OnboardingWizard', () => {
       <OnboardingWizard
         open
         codex={{ available: false, authenticatedWith: 'ChatGPT', models: [] }}
+        antigravity={{ available: false, authenticatedWith: 'Google', models: [] }}
         onClose={noop}
         onComplete={noop}
         onHostReady={asyncNoop}
         onRefreshCodex={asyncNoop}
+        onRefreshAntigravity={asyncNoop}
       />,
     )
 

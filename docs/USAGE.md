@@ -10,8 +10,10 @@ DeepSeek Harness.app / DeepSeek Harness.exe
         │       ├── sessions, plugins, settings, and work folders
         │       └── live Host configuration and credentials
         │
-        └── Codex bridge: local `codex app-server` over stdio
-                └── Codex account, model catalog, approvals, and sandbox
+        ├── Codex bridge: local `codex app-server` over stdio
+        │       └── Codex account, model catalog, approvals, and sandbox
+        └── Antigravity bridge: local `agy --output-format stream-json`
+                └── Google account, model catalog, tools, and CLI conversations
 ```
 
 The upstream checkout and its browser UI remain available at `http://127.0.0.1:3080`. Closing the app never deletes Host data. A Host that you started externally keeps running; a Host started and owned by the setup wizard is stopped when the desktop app fully quits.
@@ -22,10 +24,10 @@ The upstream checkout and its browser UI remain available at `http://127.0.0.1:3
 
 Use the [latest release](https://github.com/Eentropie/deepseek-harness-gui/releases/latest):
 
-- **macOS Apple Silicon:** download the `DeepSeek-Harness-0.2.1-arm64.dmg` or `.zip` build and open `DeepSeek Harness.app`. An unsigned package may require Control-click → **Open** once.
-- **Windows x64:** download and run `DeepSeek-Harness-0.2.1-Windows-x64.exe`. The NSIS installer can choose the install directory and create desktop/Start-menu shortcuts. An unsigned package may show a Windows SmartScreen warning.
+- **macOS Apple Silicon:** download the `DeepSeek-Harness-0.3.0-arm64.dmg` or `.zip` build and open `DeepSeek Harness.app`. An unsigned package may require Control-click → **Open** once.
+- **Windows x64:** download and run `DeepSeek-Harness-0.3.0-Windows-x64.exe`. The NSIS installer can choose the install directory and create desktop/Start-menu shortcuts. An unsigned package may show a Windows SmartScreen warning.
 
-On first launch, the setup wizard checks Node.js, finds an existing Harness checkout or npm installation, can start the Local Host, configures write-only credentials for DeepSeek or any other Host provider, checks Codex CLI/login readiness, and runs a final environment check. Work-folder selection is intentionally left to the main window after setup.
+On first launch, the setup wizard checks Node.js, finds an existing Harness checkout or npm installation, can start the Local Host, configures write-only credentials for DeepSeek or any other Host provider, checks Codex and Antigravity CLI/login readiness, and runs a final environment check. Work-folder selection is intentionally left to the main window after setup.
 
 ### Automatic or manual Local Host startup
 
@@ -55,7 +57,7 @@ Open `http://127.0.0.1:3080` in a browser if you want to verify the original web
 3. Choose **New session**.
 4. Select a model and permission mode in the composer, type a prompt, and send it.
 
-The work folder is the boundary used by Harness tools and Codex workspace-write turns. It is not the same thing as the Host checkout; you can work on any repository without moving or modifying the Host source.
+The work folder is the boundary used by Harness tools and the Codex/Antigravity bridges. It is not the same thing as the Host checkout; you can work on any repository without moving or modifying the Host source.
 
 ## 2. DeepSeek API setup
 
@@ -210,7 +212,42 @@ The composer exposes three Codex permission modes:
 
 Network access is enabled for workspace-write Codex turns because the app-server policy needs to support normal coding workflows. The selected work folder is still passed as the Codex `cwd`; do not choose a directory containing secrets if you do not intend to grant the agent access to it.
 
-## 4. Other providers and external agents
+## 4. Antigravity CLI external-agent integration
+
+The desktop app discovers the official `agy` executable, reads `agy models`, and starts each turn in stable NDJSON print mode. Antigravity owns Google authentication and its tool runtime; the GUI stores only its own projected transcript so the selected desktop session can restore the conversation.
+
+Install the official CLI on macOS/Linux and complete Google sign-in:
+
+```sh
+curl -fsSL https://antigravity.google/cli/install.sh | bash
+agy
+```
+
+Then verify the installation:
+
+```sh
+agy --version
+agy models
+agy plugins list
+```
+
+The GUI searches `DEEPSEEK_HARNESS_ANTIGRAVITY_BIN`, `~/.local/bin/agy`, Homebrew locations, and `PATH`. Windows discovery also checks `%USERPROFILE%\.local\bin\agy.exe`, `%LOCALAPPDATA%\agy\bin\agy.exe`, Program Files, and `PATH`. Restart the app after installing or changing the override.
+
+The model picker groups effort-specific IDs into one model and exposes only the efforts actually returned by the account. Model, effort, permission, and web policy changes apply on the next turn without restarting the app. Running turns accept queued follow-up messages; **Stop** terminates the owned CLI process.
+
+| Antigravity permission | CLI mapping | Boundary |
+| --- | --- | --- |
+| `read-only` | `--mode plan --sandbox` | Planning/read path in the CLI sandbox. |
+| `workspace-write` | `--mode accept-edits --sandbox --dangerously-skip-permissions` | Write-enabled CLI sandbox rooted at the selected work folder. |
+| `full-access` | `--mode accept-edits --dangerously-skip-permissions` | No CLI sandbox; use only for a trusted directory. |
+
+Antigravity's headless print mode does not pause for manual approvals: operations requiring interactive approval are soft-denied. The GUI therefore does not present a fake **Ask for approval** mode for this provider. Likewise, **Web off** is a per-turn instruction, not an operating-system network firewall. Use an external sandbox when hard network isolation is required.
+
+The Usage & billing page reports connection, CLI version, and model count. The current headless CLI exposes no stable quota/balance endpoint, so the app does not fabricate a remaining-usage meter. Imported Antigravity plugins appear in the plugin manager and can be enabled or disabled through `agy plugins`; an empty `agy plugins list` produces no rows.
+
+Official references: [Antigravity CLI](https://www.antigravity.google/product/antigravity-cli), [CLI reference](https://www.antigravity.google/docs/cli-reference), [permissions](https://www.antigravity.google/docs/cli/permissions), and [conversations](https://www.antigravity.google/docs/cli-conversations).
+
+## 5. Other providers and external agents
 
 ### OpenAI-compatible provider routes
 
@@ -252,17 +289,17 @@ The exact protocol, model IDs, reasoning field, and `/v1` suffix belong to the g
 
 ### Claude Code, OpenCode, and other agent CLIs
 
-This release does **not** auto-launch arbitrary agent binaries. The executable bridge recognizes Codex because it implements Codex App Server. Installing `claude`, `opencode`, or another CLI alone will not add it to the model selector.
+This release does **not** auto-launch arbitrary agent binaries. The executable bridge recognizes Codex App Server and Antigravity's stable `stream-json` protocol. Installing `claude`, `opencode`, or another unsupported CLI alone will not add it to the model selector.
 
 You have three supported options:
 
 1. Run the other agent in its own terminal or official GUI while DeepSeek Harness remains connected to the same repository.
 2. Use its underlying model API as a Host provider route if it exposes a compatible HTTP API and the Host has an adapter for it.
-3. Build a future desktop adapter that maps the agent's streaming, tool, approval, thread, and interrupt protocol to the same bridge contract. Do not point `DEEPSEEK_WORKBENCH_CODEX_BIN` at a non-Codex executable; that variable is specifically for the Codex CLI.
+3. Build a future desktop adapter that maps the agent's streaming, tool, approval, thread, and interrupt protocol to the same bridge contract. Do not point `DEEPSEEK_WORKBENCH_CODEX_BIN` or `DEEPSEEK_HARNESS_ANTIGRAVITY_BIN` at an unrelated executable.
 
 This boundary is intentional: an unknown agent process could receive the work folder, files, credentials, and approval decisions without the GUI being able to enforce the Codex sandbox contract.
 
-## 5. Work folders, sessions, plugins, and settings
+## 6. Work folders, sessions, plugins, and settings
 
 - **Work folders:** `Command-O` / `Ctrl+O`, or **Open folder…**. Switching folders does not move the Host checkout.
 - **Sessions:** use the sidebar or command palette for new, rename, pin, archive, fork, export, and delete actions. Host logs are not permanently deleted by the desktop delete action because the current Host has no permanent session-delete API.
@@ -270,7 +307,7 @@ This boundary is intentional: an unknown agent process could receive the work fo
 - **Agent presets:** **Settings → Agent presets** changes the default composition for later sessions. It does not recompute an existing conversation.
 - **Appearance:** **Settings → Appearance** supports system, light, and dark modes, density, Serif responses, and reduced motion.
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
@@ -281,6 +318,9 @@ This boundary is intentional: an unknown agent process could receive the work fo
 | Codex is not listed | Run `codex --version`, then `codex --login`; set `DEEPSEEK_WORKBENCH_CODEX_BIN` to an absolute executable path and restart the GUI. |
 | Codex has no selectable models | The CLI is not signed in, the account has no available catalog, or the CLI version is too old for the app-server methods used by this build. Test `codex` in the same shell first. |
 | Codex approval behaves unexpectedly | Check the permission mode and the selected work folder. `full-access` is intentionally broader than workspace-write. |
+| Antigravity is not listed | Run `agy --version` and `agy models`, complete Google sign-in, then restart the GUI. Set `DEEPSEEK_HARNESS_ANTIGRAVITY_BIN` to the absolute executable path if discovery still fails. |
+| Antigravity has no models | Open interactive `agy` once to finish login. The GUI hides the provider when `agy models` returns no usable catalog. |
+| Antigravity denies an operation | Headless print mode cannot pause for manual approval. Select the real workspace-write/full-access mode only when appropriate, or perform the operation interactively in `agy`. |
 | Windows app exits immediately | Extract the entire `win-unpacked` directory and run the `.exe` beside its `resources` and DLL files. |
 
 ## Security boundaries
@@ -288,4 +328,5 @@ This boundary is intentional: an unknown agent process could receive the work fo
 - The Local Host stays on loopback and is not replaced by the GUI.
 - API keys are write-only across the desktop bridge. Stored desktop billing keys use operating-system secure storage; Host credentials remain owned by the Host credential service.
 - Codex authentication remains in Codex CLI. The GUI starts a local app-server process but does not copy its token.
+- Antigravity authentication remains in the official CLI. The GUI launches `agy`, but does not read or copy Google credentials.
 - Release packages are unsigned. Verify the release checksum and review permission mode before granting an agent access to a sensitive work folder.

@@ -28,6 +28,10 @@ contextBridge.exposeInMainWorld('dshDesktop', {
   codexSteer: (threadId: string, turnId: string, prompt: string) => ipcRenderer.invoke('dsh:codex-steer', threadId, turnId, prompt),
   codexInterrupt: (threadId: string, turnId: string) => ipcRenderer.invoke('dsh:codex-interrupt', threadId, turnId),
   codexRespondApproval: (requestId: string | number, decision: string) => ipcRenderer.invoke('dsh:codex-respond-approval', requestId, decision),
+  antigravityCatalog: (refresh?: boolean) => ipcRenderer.invoke('dsh:antigravity-catalog', refresh),
+  antigravityPrompt: (payload: unknown) => ipcRenderer.invoke('dsh:antigravity-prompt', payload),
+  antigravityReadThread: (conversationId: string) => ipcRenderer.invoke('dsh:antigravity-read-thread', conversationId),
+  antigravityInterrupt: (conversationId: string, turnId: string) => ipcRenderer.invoke('dsh:antigravity-interrupt', conversationId, turnId),
   terminalRun: (input: unknown) => ipcRenderer.invoke('dsh:terminal-run', input),
   terminalStop: (id: string) => ipcRenderer.invoke('dsh:terminal-stop', id),
   terminalChangeDirectory: (cwd: string, target: string) => ipcRenderer.invoke('dsh:terminal-change-directory', cwd, target),
@@ -67,6 +71,11 @@ contextBridge.exposeInMainWorld('dshDesktop', {
     const handler = (_event: Electron.IpcRendererEvent, payload: unknown): void => listener(payload)
     ipcRenderer.on('dsh:codex-event', handler)
     return () => ipcRenderer.removeListener('dsh:codex-event', handler)
+  },
+  onAntigravityEvent: (listener: (event: unknown) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: unknown): void => listener(payload)
+    ipcRenderer.on('dsh:antigravity-event', handler)
+    return () => ipcRenderer.removeListener('dsh:antigravity-event', handler)
   },
   onTerminalEvent: (listener: (event: unknown) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: unknown): void => listener(payload)

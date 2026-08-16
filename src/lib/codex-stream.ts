@@ -1,11 +1,20 @@
-import type { CodexEvent, ConversationMessage, ProcessBlock } from './types.ts'
+import type { AntigravityEvent, CodexEvent, ConversationMessage, ProcessBlock } from './types.ts'
 import { joinTurnBlocks, splitTurnBlocks } from './thought-process.ts'
 
 export type CodexDeltaEvent = Extract<CodexEvent, { type: 'assistant-delta' | 'reasoning-delta' }>
 export type CodexToolEvent = Extract<CodexEvent, { type: 'tool-item' }>
+export type ProviderDeltaEvent = CodexDeltaEvent | Extract<AntigravityEvent, { type: 'assistant-delta' | 'reasoning-delta' }>
+export type ProviderToolEvent = CodexToolEvent | Extract<AntigravityEvent, { type: 'tool-item' }>
 
-function ensureTurn(current: ConversationMessage[], turnId: string, now: number): { next: ConversationMessage[]; index: number } {
-  const id = `codex-turn-${turnId}`
+export interface StreamPresentation {
+  idPrefix: 'codex' | 'antigravity'
+  agent: 'Codex' | 'Antigravity'
+}
+
+const CODEX_STREAM: StreamPresentation = { idPrefix: 'codex', agent: 'Codex' }
+
+function ensureTurn(current: ConversationMessage[], turnId: string, now: number, presentation: StreamPresentation): { next: ConversationMessage[]; index: number } {
+  const id = `${presentation.idPrefix}-turn-${turnId}`
   const index = current.findIndex(message => message.id === id)
   if (index >= 0) return { next: [...current], index }
   return {
@@ -14,7 +23,7 @@ function ensureTurn(current: ConversationMessage[], turnId: string, now: number)
       seq: (current.at(-1)?.seq ?? 0) + 1,
       time: now,
       role: 'assistant',
-      agent: 'Codex',
+      agent: presentation.agent,
       blocks: [],
       streaming: true,
     }],
@@ -24,10 +33,11 @@ function ensureTurn(current: ConversationMessage[], turnId: string, now: number)
 
 export function applyCodexToolEvent(
   current: ConversationMessage[],
-  event: CodexToolEvent,
+  event: ProviderToolEvent,
   now = Date.now(),
+  presentation: StreamPresentation = CODEX_STREAM,
 ): ConversationMessage[] {
-  const { next, index } = ensureTurn(current, event.turnId, now)
+  const { next, index } = ensureTurn(current, event.turnId, now, presentation)
   const existing = next[index]
   if (existing === undefined) return current
   const { thought, answer } = splitTurnBlocks(existing.blocks)
@@ -51,15 +61,16 @@ export function applyCodexToolEvent(
 /** Apply a visual batch while retaining every untouched message reference. */
 export function applyCodexDeltas(
   current: ConversationMessage[],
-  events: readonly CodexDeltaEvent[],
+  events: readonly ProviderDeltaEvent[],
   now = Date.now(),
+  presentation: StreamPresentation = CODEX_STREAM,
 ): ConversationMessage[] {
   if (events.length === 0) return current
   const next = [...current]
   const indexes = new Map(next.map((message, index) => [message.id, index]))
 
   for (const event of events) {
-    const id = `codex-turn-${event.turnId}`
+    const id = `${presentation.idPrefix}-turn-${event.turnId}`
     let index = indexes.get(id)
     if (index === undefined) {
       indexes.set(id, next.length)
@@ -68,7 +79,7 @@ export function applyCodexDeltas(
         seq: (next.at(-1)?.seq ?? 0) + 1,
         time: now,
         role: 'assistant',
-        agent: 'Codex',
+        agent: presentation.agent,
         blocks: [],
         streaming: true,
       })

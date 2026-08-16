@@ -1,4 +1,8 @@
 import type {
+  AntigravityCatalog,
+  AntigravityEvent,
+  AntigravityPromptResult,
+  AntigravityThreadSnapshot,
   AgentPresetDocument,
   AgentPresetOpenResult,
   AgentPresetRoster,
@@ -393,6 +397,43 @@ export const codexApi = {
   },
 }
 
+export const antigravityApi = {
+  catalog: (refresh = false): Promise<AntigravityCatalog> => window.dshDesktop === undefined
+    ? Promise.resolve({
+        available: false,
+        authenticatedWith: 'Google',
+        models: [],
+        error: 'Antigravity CLI integration is available in the packaged desktop app.',
+      })
+    : window.dshDesktop.antigravityCatalog(refresh),
+  prompt: (payload: {
+    sessionId: string
+    conversationId?: string
+    cwd: string
+    model: string
+    effort: string
+    permission: import('./types.ts').AntigravityPermissionMode
+    network: import('./types.ts').EffectiveNetworkMode
+    prompt: string
+    context?: import('./types.ts').ProviderHandoffMessage[]
+  }): Promise<AntigravityPromptResult> => {
+    if (window.dshDesktop === undefined) return Promise.reject(new Error('Antigravity CLI requires the desktop app'))
+    return window.dshDesktop.antigravityPrompt(payload)
+  },
+  readThread: (conversationId: string): Promise<AntigravityThreadSnapshot> => {
+    if (window.dshDesktop === undefined) return Promise.reject(new Error('Antigravity CLI requires the desktop app'))
+    return window.dshDesktop.antigravityReadThread(conversationId)
+  },
+  interrupt: (conversationId: string, turnId: string): Promise<void> => {
+    if (window.dshDesktop === undefined) return Promise.reject(new Error('Antigravity CLI requires the desktop app'))
+    return window.dshDesktop.antigravityInterrupt(conversationId, turnId)
+  },
+}
+
+export function subscribeAntigravity(onEvent: (event: AntigravityEvent) => void): () => void {
+  return window.dshDesktop?.onAntigravityEvent(onEvent) ?? (() => {})
+}
+
 export const terminalApi = {
   run: (input: { id: string; cwd: string; command: string }): Promise<{ accepted: true }> => {
     if (window.dshDesktop === undefined) return Promise.reject(new Error('Terminal requires the desktop app'))
@@ -426,7 +467,7 @@ export const setupApi = {
     return window.dshDesktop.setupStartHost()
   },
   stopHost: (): Promise<void> => window.dshDesktop?.setupStopHost() ?? Promise.resolve(),
-  openExternal: (target: 'deepseek-key' | 'node' | 'codex-install'): Promise<void> => {
+  openExternal: (target: 'deepseek-key' | 'node' | 'codex-install' | 'antigravity-install'): Promise<void> => {
     if (window.dshDesktop === undefined) return Promise.reject(new Error('Setup links require the desktop app'))
     return window.dshDesktop.setupOpenExternal(target)
   },

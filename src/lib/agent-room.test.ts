@@ -40,6 +40,8 @@ describe('Agent Room', () => {
     expect(agentPermissionChoices('deepseek', 'workspace-write')).toHaveLength(1)
     expect(agentPermissionChoices('codex-cli')[0]?.value).toBe('read-only')
     expect(agentPermissionChoices('codex-cli')[1]?.isolated).toBe(true)
+    expect(agentPermissionChoices('antigravity-cli').map(choice => choice.value)).toEqual(['read-only', 'workspace-write', 'full-access'])
+    expect(agentPermissionChoices('antigravity-cli')[1]?.isolated).toBe(true)
   })
 
   it('freezes a bounded parent transcript for independent agents', () => {

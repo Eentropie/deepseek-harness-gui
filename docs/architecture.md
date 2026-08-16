@@ -14,6 +14,7 @@ Electron main process -------------------- Native folder picker
         +---- allowlisted Harness RPC ---- 127.0.0.1:3080
         +---- read-only event downlinks --- 127.0.0.1:3080
         +---- JSONL stdio sidecar --------- local `codex app-server`
+        +---- NDJSON print sidecar -------- local `agy`
         +---- read-only local font routes - fixed app-resource paths
         +---- plugin profile controller --- ~/.dsh/profiles/web/cordis.patch.yml
 ```
@@ -29,7 +30,7 @@ The BrowserWindow uses:
 - `sandbox: true`
 - `webSecurity: true`
 
-The preload exposes only typed operations for allowlisted Harness RPC calls, plugin inventory and toggles, the native directory picker, connection state, downlink events, and the bounded Codex catalog/thread/turn operations. The renderer has no general filesystem, process, shell, or arbitrary IPC access.
+The preload exposes only typed operations for allowlisted Harness RPC calls, plugin inventory and toggles, the native directory picker, connection state, downlink events, and bounded Codex/Antigravity catalog, thread, turn, and interrupt operations. The renderer has no general filesystem, process, shell, or arbitrary IPC access.
 
 Agent-preset support adds only the Host's existing `agentPreset.*` methods plus `settings.describe`, `settings.openDocument`, and a narrowed `settings.update`. The main-process payload policy restricts that write to `agent-presets.default`, validates every preset id as a single safe directory-name token, and allows copy-only authoring metadata. No renderer payload can provide a preset composition or filesystem path.
 
@@ -50,6 +51,14 @@ The model picker merges the Host's `session.models` result with Codex's account-
 Codex prompts run as Codex agent turns in a workspace-write sandbox rooted at the exact folder owned by the selected Harness session. The main process re-reads Harness session/workspace projections before every new turn and refuses a renderer-supplied path outside that set. Interactive approval requests fail closed; the bridge cannot silently grant broader access.
 
 DeepSeek and Codex retain separate provider-native histories under one desktop session shell. Switching providers changes the visible transcript and restores that provider's thread. This avoids pretending that ChatGPT subscription authentication is an OpenAI API key or injecting one agent's internal state into the other agent's history. See [ADR 0001](./adr/0001-codex-cli-sidecar.md).
+
+## Antigravity CLI boundary
+
+The main process launches only an allowlisted, discovered `agy` executable with fixed print-mode arguments and parses its `stream-json` NDJSON events. Google authentication, model access, and tool execution remain owned by Antigravity CLI. The renderer cannot provide an arbitrary executable path or shell command.
+
+Before every turn, the main process checks the requested `cwd` against the workspaces projected by the Harness Host. Effort-specific CLI model IDs are collapsed into one UI model but expanded back to the exact account-advertised variant before launch. Provider histories remain separate; the desktop stores only its projected Antigravity transcript because the CLI's native conversation database is not a renderer-readable chat store.
+
+The three displayed permission modes map to real CLI flags: read-only uses plan+sandbox, workspace-write uses accept-edits+sandbox, and full-access removes the sandbox. Headless print mode cannot pause for interactive approval, so the UI does not claim to offer an Antigravity approval prompt. Network Off/Auto is a turn instruction rather than a kernel-level network sandbox.
 
 ## Plugin changes
 

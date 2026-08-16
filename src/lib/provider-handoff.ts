@@ -52,7 +52,7 @@ export function collectProviderHandoff(
 }
 
 export function providerHandoffText(
-  source: 'DeepSeek' | 'Codex',
+  source: 'DeepSeek' | 'Codex' | 'Antigravity' | 'DeepSeek Harness',
   batch: Pick<ProviderHandoffBatch, 'messages' | 'omitted'>,
 ): string {
   const omission = batch.omitted > 0 ? `\n${batch.omitted} older messages were omitted to keep the handoff bounded.` : ''
@@ -100,5 +100,26 @@ export function mergeProviderTranscripts(
       ...(message.role === 'assistant' ? { agent: 'DeepSeek' as const } : {}),
     })),
     ...codex.map(message => ({ ...message, id: `codex:${message.id}` })),
+  ].sort((left, right) => left.time - right.time || left.seq - right.seq)
+}
+
+/** Merge all desktop providers while preserving each backend's id namespace. */
+export function mergeAllProviderTranscripts(
+  deepSeek: ConversationMessage[],
+  codex: ConversationMessage[],
+  antigravity: ConversationMessage[],
+): ConversationMessage[] {
+  return [
+    ...deepSeek.map(message => ({
+      ...message,
+      id: `deepseek:${message.id}`,
+      ...(message.role === 'assistant' ? { agent: 'DeepSeek' as const } : {}),
+    })),
+    ...codex.map(message => ({ ...message, id: `codex:${message.id}` })),
+    ...antigravity.map(message => ({
+      ...message,
+      id: `antigravity:${message.id}`,
+      ...(message.role === 'assistant' ? { agent: 'Antigravity' as const } : {}),
+    })),
   ].sort((left, right) => left.time - right.time || left.seq - right.seq)
 }

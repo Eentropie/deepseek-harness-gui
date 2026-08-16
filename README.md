@@ -4,7 +4,7 @@
   <img src="./docs/images/workbench-desktop.png" alt="DeepSeek Harness desktop workbench" width="92%" />
 </p>
 
-<p align="center"><strong>A native macOS and Windows workbench for DeepSeek Harness, Codex, and local coding workflows.</strong></p>
+<p align="center"><strong>A native macOS and Windows workbench for DeepSeek Harness, Codex, Antigravity, and local coding workflows.</strong></p>
 
 <p align="center">
   <a href="https://github.com/Eentropie/deepseek-harness-gui/releases/latest">Download latest</a> ·
@@ -20,12 +20,12 @@ DeepSeek Harness is a standalone macOS and Windows desktop GUI for a local DeepS
 
 - Local desktop window with no browser dependency
 - Work-folder and session switcher
-- Native workspace/session menus, drag reordering, pin/unread state, and a collapsed Archived section
+- Native workspace/session menus, drag reordering, pin/unread state, and archived-chat management in Settings
 - Native operating-system folder picker
 - Command palette and keyboard shortcuts
 - Model, reasoning-effort, and permission controls
 - Per-session Off / Auto / Ask web access, with source cards for search and page fetches
-- DeepSeek plus account-scoped ChatGPT/Codex models through the local Codex CLI login
+- DeepSeek, account-scoped ChatGPT/Codex models, and signed-in Google Antigravity CLI models in one hot-swappable picker
 - Native Harness Agent presets with Standard, Code, Minimal, and Creator modes
 - Session context and activity inspector
 - Shared Context, file Review/editor, multi-Sidechat, approval, and Subagent side panel
@@ -52,12 +52,12 @@ The visual system uses only black, white, and neutral grays. On macOS, the deskt
 
 1. Download the [latest macOS DMG/ZIP or Windows installer](https://github.com/Eentropie/deepseek-harness-gui/releases/latest).
 2. Launch the app. The first-run wizard checks Node.js, detects an existing Harness checkout or installed package, and can start the Local Host for you.
-3. Configure DeepSeek or any other Host model API, then verify the locally installed/signed-in Codex CLI if desired. Choose a work folder later from the main window.
+3. Configure DeepSeek or another Host model API, then verify the locally installed/signed-in Codex and Antigravity CLIs if desired. Choose a work folder later from the main window.
 4. Select **Run environment check**. When every required item is ready, enter the workbench.
 
 The Host remains a separate local process at `127.0.0.1:3080`; the app starts it without modifying or embedding the upstream localhost interface. If automatic detection is unavailable, the wizard provides the exact install/login links and the manual commands below.
 
-The complete setup, DeepSeek API, Codex, external-provider, permissions, and troubleshooting walkthrough is in [the usage guide](./docs/USAGE.md). 中文用户可直接阅读[中文使用说明](./docs/USAGE.zh-CN.md)。
+The complete setup, DeepSeek API, Codex, Antigravity, external-provider, permissions, and troubleshooting walkthrough is in [the usage guide](./docs/USAGE.md). 中文用户可直接阅读[中文使用说明](./docs/USAGE.zh-CN.md)。
 
 ## Run it
 
@@ -85,24 +85,26 @@ corepack pnpm dsh web
 
 The desktop app talks only to the local Host at `127.0.0.1:3080`. It does not replace or patch that Host.
 
-For ChatGPT/Codex models, the desktop app also starts the locally installed `codex app-server`. Codex keeps ownership of authentication; the workbench never reads or copies its login token.
+For ChatGPT/Codex models, the desktop app starts the locally installed `codex app-server`. For Antigravity models, it launches the signed-in local `agy` CLI in stable `stream-json` print mode. Each CLI keeps ownership of its own authentication; the workbench never reads or copies login tokens.
 
-## DeepSeek and Codex models
+## DeepSeek, Codex, and Antigravity models
 
-The same model selector contains two live groups:
+The same model selector contains three live groups:
 
 - **DeepSeek:** models returned by Harness. Their reasoning selector currently switches among `Off`, `High`, and `Max`.
 - **ChatGPT · Codex CLI:** models returned by the signed-in Codex account. Every model supplies its own list, such as `Low`, `Medium`, `High`, `X-High`, `Max`, and, where available, `Ultra`.
+- **Google · Antigravity CLI:** models returned by `agy models`, grouped so effort-specific variants become one model with its real `Low`, `Medium`, or `High` choices. The current account may expose Gemini, Claude, and GPT-OSS families; the GUI uses each model family's own mark.
 
-Changing the model or reasoning effort takes effect on the next turn and does not restart the Host or desktop app. DeepSeek and Codex keep separate native conversation histories under the selected desktop session; switching provider restores the corresponding real thread. Codex turns are limited to the selected Harness work folder with a workspace-write sandbox.
+Changing the model, reasoning effort, or permission takes effect on the next turn and does not restart the Host or desktop app. DeepSeek, Codex, and Antigravity keep separate provider-native histories under the selected desktop session; switching provider restores the corresponding thread and hands over a bounded visible context. Running Antigravity turns accept queued follow-ups instead of injecting a second prompt into the active CLI process.
 
-Web access is also hot-swappable per session and per sidechat. **Codex** maps the control to the CLI's live web-search configuration before the next turn. **DeepSeek** uses the `web_search` / `web_fetch` tools already exposed by the selected Harness preset; Minimal mode does not expose them. Search sources and fetched pages appear as expandable cards inside Thought process, and **Ask before web** requests permission for each turn. On DeepSeek, Off/Auto is a model-facing turn policy because the current Host has no session-scoped tool-mutation RPC; hard enforcement still belongs in the selected preset or trusted tool runtime. The desktop does not patch or globally toggle the Local Host's plugin composition.
+Web access is also hot-swappable per session and per sidechat. **Codex** maps the control to the CLI's live web-search configuration before the next turn. **DeepSeek** uses the `web_search` / `web_fetch` tools exposed by the selected Harness preset. **Antigravity** receives a per-turn network policy; its CLI remains the tool owner. Search and fetch records appear inside Thought process. On DeepSeek and Antigravity, the desktop policy is model-facing because neither current bridge exposes a session-scoped operating-system network sandbox; hard enforcement still belongs in the trusted Host, CLI, or system sandbox.
 
 ### External agents and provider routes
 
 - **Codex CLI** is the first-class external-agent integration. The GUI starts `codex app-server --listen stdio://` on demand, reads its live model catalog, and keeps Codex authentication in the CLI-owned credential store.
+- **Antigravity CLI** is a first-class external-agent integration. The GUI discovers the official `agy` executable, reads the signed-in model catalog, streams reasoning/tools/final output, resumes CLI conversations, supports stop/queue, and exposes imported Antigravity plugins when present.
 - **DeepSeek and other LLM providers** are Host provider routes. Configure them through **Settings → Models & credentials**; the GUI never treats an API key as conversation content.
-- **Other agent CLIs** such as Claude Code or OpenCode are not auto-discovered as executable agents in this release. They can be used separately, or connected as model/provider routes when the Host exposes a compatible adapter. Making another agent first-class requires an adapter for the Codex App Server contract or a future desktop bridge.
+- **Other agent CLIs** such as Claude Code or OpenCode are not auto-discovered as executable agents in this release. They can be used separately, or connected as model/provider routes when the Host exposes a compatible adapter.
 
 See [External agents and API setup](./docs/USAGE.md#other-providers-and-external-agents) for executable discovery, Codex login, DeepSeek API keys, OpenAI-compatible gateways, reasoning levels, and permission boundaries.
 
@@ -114,18 +116,18 @@ Choose **Open folder…** in the sidebar or press `Command-O` on macOS / `Ctrl+O
 
 Right-click a session, double-click it, or use the chat `…` menu for native actions such as pin, rename, archive, mark unread, reveal/copy workspace details, fork, export, open in a new window, and delete.
 
-Archived sessions appear in the collapsed **Archived** group at the bottom of the sidebar. **Delete chat…** removes a session from this desktop client after confirmation, but the current Harness Host has no permanent session-delete API, so its underlying Host log remains on disk. Deletion is disabled while the session is running.
+Archived sessions are managed under **Settings → Archived chats**, keeping the main sidebar focused on active work. **Delete chat…** removes a session from this desktop client after confirmation, but the current Harness Host has no permanent session-delete API, so its underlying Host log remains on disk. Deletion is disabled while the session is running.
 
 For the exact Host parity boundary and recommended next features, see [HOST_CAPABILITY_AUDIT.md](./HOST_CAPABILITY_AUDIT.md).
 
 ## Side panel, Review, Sidechat, and Terminal
 
-The right side panel shares one fixed area among four views:
+The right side panel shares one resizable area among four views and compresses or expands the center thread as the panel width changes:
 
 - **Context:** the complete runtime, token, session, task, goal, skills, and activity view.
 - **Review:** pending approvals plus a lazy, collapsible browser for the selected main chat's work folder. Select text files for Git diff reading and guarded editing; double-click or use the external-open control to launch any file with the operating system's associated app. Saves use an expected-content hash so a file changed by another process is not overwritten.
 - **Sidechat:** side threads are owned by the selected main chat. Switching the main chat switches its Sidechat collection; one main chat can keep multiple closable Sidechats, each with its own draft, transcript, model, reasoning effort, and permission mode. Orphaned local tabs are reconciled when their Host session or Codex thread no longer exists.
-- **Agent Room:** manually compose only the model sources that are already live through a configured Host API or the signed-in Codex subscription. Each participant keeps its own model, reasoning effort, permission, web mode, and role. The adversarial-audit template runs independent reviews, cross rebuttals, and a judge synthesis; review agents default to read-only, while write-enabled agents receive isolated Git worktrees. Harness-native Subagents remain visible below the desktop-managed room. Claude Code CLI is intentionally not adapted in this release.
+- **Agent Room:** manually compose only the model sources that are already live through a configured Host API, signed-in Codex subscription, or signed-in Antigravity account. Each participant keeps its own model, reasoning effort, real permission, web mode, and role. The adversarial-audit template runs independent reviews, cross rebuttals, and a judge synthesis; review agents default to read-only, while write-enabled agents receive isolated Git worktrees. Reports are injected or queued back to the owning main thread. Harness-native Subagents remain visible below the desktop-managed room. Claude Code CLI is intentionally not adapted in this release.
 
 The bottom Terminal opens only in the center conversation column. Toggle it with the top-right layout control or `Command-J` / `Ctrl-J`.
 
@@ -208,9 +210,9 @@ corepack pnpm dist:win
 Outputs are:
 
 - macOS unpacked: `release/mac-arm64/DeepSeek Harness.app`
-- macOS installer/archive: `release/DeepSeek-Harness-0.2.1-arm64.dmg` and `.zip`
+- macOS installer/archive: `release/DeepSeek-Harness-0.3.0-arm64.dmg` and `.zip`
 - Windows unpacked: `release/win-unpacked/DeepSeek Harness.exe`
-- Windows NSIS installer: `release/DeepSeek-Harness-0.2.1-Windows-x64.exe`
+- Windows NSIS installer: `release/DeepSeek-Harness-0.3.0-Windows-x64.exe`
 
 These local builds are unsigned. macOS may require Control-click → **Open** once. Windows SmartScreen may show an unrecognized-publisher warning; verify the package source and checksum before choosing **Run anyway**. Production distribution should use Apple Developer ID and Authenticode signing respectively.
 

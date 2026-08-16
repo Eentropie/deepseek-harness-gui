@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { agentWorkspaceApi, codexApi, harnessApi, subscribeCodex } from '../lib/api.ts'
+import { agentWorkspaceApi, antigravityApi, codexApi, harnessApi, subscribeAntigravity, subscribeCodex } from '../lib/api.ts'
 import {
+  AGENT_ROOM_ANTIGRAVITY_PROVIDER,
   AGENT_ROOM_CODEX_PROVIDER,
   AGENT_ROOM_ROLES,
   agentRoomReport,
@@ -25,7 +26,7 @@ import {
 } from '../lib/agent-room.ts'
 import { projectConversation } from '../lib/history.ts'
 import { deepSeekNetworkPolicy } from '../lib/network-mode.ts'
-import type { CodexEvent, ConversationMessage, NetworkMode, SessionModels, SubagentCatalog, SubagentEntry } from '../lib/types.ts'
+import type { AntigravityEvent, AntigravityPermissionMode, CodexEvent, ConversationMessage, NetworkMode, SessionModels, SubagentCatalog, SubagentEntry } from '../lib/types.ts'
 import { Icon } from './Icon.tsx'
 import { Markdown } from './Markdown.tsx'
 import { ProviderLogo } from './ProviderLogo.tsx'
@@ -67,7 +68,7 @@ interface AgentDraft {
 }
 
 interface ActiveRun {
-  kind: 'host' | 'codex'
+  kind: 'host' | 'codex' | 'antigravity'
   hostSessionId?: string
   threadId?: string
   turnId?: string
@@ -153,6 +154,7 @@ export function AgentRoom({
       void Promise.allSettled([...activeRuns.current.values()].map(run => {
         if (run.kind === 'host' && run.hostSessionId !== undefined) return harnessApi.cancel(run.hostSessionId)
         if (run.kind === 'codex' && run.threadId !== undefined && run.turnId !== undefined) return codexApi.interrupt(run.threadId, run.turnId)
+        if (run.kind === 'antigravity' && run.threadId !== undefined && run.turnId !== undefined) return antigravityApi.interrupt(run.threadId, run.turnId)
         return Promise.resolve()
       }))
       activeRuns.current.clear()
@@ -182,7 +184,7 @@ export function AgentRoom({
         provider: firstGroup.id,
         model: firstModel.id,
         effort: firstModel.reasoning?.defaultEffort,
-        permission: firstGroup.id === AGENT_ROOM_CODEX_PROVIDER ? 'read-only' : hostPermission,
+        permission: firstGroup.id === AGENT_ROOM_CODEX_PROVIDER || firstGroup.id === AGENT_ROOM_ANTIGRAVITY_PROVIDER ? 'read-only' : hostPermission,
         network: 'auto',
         role: roomRef.current.agents.length === 1 ? 'challenger' : roomRef.current.agents.length >= 2 ? 'judge' : 'reviewer',
         label: '',
@@ -197,7 +199,7 @@ export function AgentRoom({
   useEffect(() => {
     if (parentSessionId === undefined) return
     commitRoom(current => {
-      const agents = current.agents.map(agent => agent.provider === AGENT_ROOM_CODEX_PROVIDER
+      const agents = current.agents.map(agent => agent.provider === AGENT_ROOM_CODEX_PROVIDER || agent.provider === AGENT_ROOM_ANTIGRAVITY_PROVIDER
         ? agent
         : { ...agent, permission: hostPermission, effectivePermission: hostPermission })
       return agents.every((agent, index) => agent === current.agents[index]) ? current : { ...current, agents }
@@ -245,7 +247,7 @@ export function AgentRoom({
       provider: selection.group.id,
       model: selection.model.id,
       effort: selection.model.reasoning?.defaultEffort,
-      permission: selection.group.id === AGENT_ROOM_CODEX_PROVIDER ? 'read-only' : hostPermission,
+      permission: selection.group.id === AGENT_ROOM_CODEX_PROVIDER || selection.group.id === AGENT_ROOM_ANTIGRAVITY_PROVIDER ? 'read-only' : hostPermission,
     })
   }
 
@@ -268,13 +270,13 @@ export function AgentRoom({
       ...current,
       label: '',
       role: room.agents.length === 0 ? 'challenger' : room.agents.length === 1 ? 'judge' : 'reviewer',
-      permission: current.provider === AGENT_ROOM_CODEX_PROVIDER ? 'read-only' : hostPermission,
+      permission: current.provider === AGENT_ROOM_CODEX_PROVIDER || current.provider === AGENT_ROOM_ANTIGRAVITY_PROVIDER ? 'read-only' : hostPermission,
     })
     setAdding(false)
   }
 
   const handleRemove = (agentId: string): void => {
-    if (room.running || !window.confirm('Remove this managed agent from the room? Its Host/Codex transcript will not be deleted.')) return
+    if (room.running || !window.confirm('Remove this managed agent from the room? Its Host/Codex/Antigravity transcript will not be deleted.')) return
     commitRoom(current => {
       const removedHostSessionId = current.agents.find(agent => agent.id === agentId)?.hostSessionId
       return {
@@ -345,6 +347,56 @@ export function AgentRoom({
     }
   }
 
+  const runAntigravity = async (agent: AgentRoomAgent, prompt: string, runtimeCwd: string): Promise<string> => {
+    if (parentSessionId === undefined || agent.effort === undefined) throw new Error('Antigravity model metadata is unavailable')
+    const owner = agentRoomOwnerId(parentSessionId, agent.id)
+    let completed: Extract<AntigravityEvent, { type: 'turn-completed' }> | undefined
+    let failed: Error | undefined
+    let wake: (() => void) | undefined
+    const signal = new Promise<void>(resolve => { wake = resolve })
+    const dispose = subscribeAntigravity(event => {
+      if (event.sessionId !== owner) return
+      if (event.type === 'turn-completed') {
+        completed = event
+        wake?.()
+      } else if (event.type === 'error') {
+        failed = new Error(event.message)
+        wake?.()
+      }
+    })
+    try {
+      const permission = agent.permission as AntigravityPermissionMode
+      updateAgent(agent.id, { effectivePermission: permission })
+      const result = await antigravityApi.prompt({
+        sessionId: owner,
+        ...(agent.antigravityConversationId === undefined ? {} : { conversationId: agent.antigravityConversationId }),
+        cwd: runtimeCwd,
+        model: agent.model,
+        effort: agent.effort,
+        permission,
+        network: resolvedNetwork(agent.network),
+        prompt,
+      })
+      activeRuns.current.set(agent.id, { kind: 'antigravity', threadId: result.conversationId, turnId: result.turnId })
+      updateAgent(agent.id, { antigravityConversationId: result.conversationId, runtimeCwd, isolated: runtimeCwd !== cwd })
+      if (completed === undefined && failed === undefined) {
+        await Promise.race([
+          signal,
+          sleep(10 * 60_000).then(() => { throw new Error('Antigravity agent timed out after 10 minutes') }),
+        ])
+      }
+      if (failed !== undefined) throw failed
+      if (completed?.status !== 'completed') throw new Error(completed?.error ?? `Antigravity agent ${completed?.status ?? 'stopped'}`)
+      const snapshot = await antigravityApi.readThread(result.conversationId)
+      const output = finalAssistantText(snapshot.messages)
+      if (output === undefined) throw new Error('Antigravity agent completed without a final answer')
+      return output
+    } finally {
+      activeRuns.current.delete(agent.id)
+      dispose()
+    }
+  }
+
   const runHost = async (agent: AgentRoomAgent, prompt: string, runtimeCwd: string): Promise<string> => {
     let sessionId = agent.runtimeCwd === runtimeCwd ? agent.hostSessionId : undefined
     if (sessionId === undefined) {
@@ -392,6 +444,7 @@ export function AgentRoom({
     await Promise.allSettled(runs.map(run => {
       if (run.kind === 'host' && run.hostSessionId !== undefined) return harnessApi.cancel(run.hostSessionId)
       if (run.kind === 'codex' && run.threadId !== undefined && run.turnId !== undefined) return codexApi.interrupt(run.threadId, run.turnId)
+      if (run.kind === 'antigravity' && run.threadId !== undefined && run.turnId !== undefined) return antigravityApi.interrupt(run.threadId, run.turnId)
       return Promise.resolve()
     }))
   }, [])
@@ -408,9 +461,11 @@ export function AgentRoom({
     try {
       const agent = roomRef.current.agents.find(candidate => candidate.id === agentInput.id) ?? agentInput
       const runtime = await runtimeDirectory(agent)
-      const output = agent.provider === AGENT_ROOM_CODEX_PROVIDER
-        ? await runCodex(agent, prompt, runtime.cwd)
-        : await runHost(agent, prompt, runtime.cwd)
+      const output = agent.provider === AGENT_ROOM_ANTIGRAVITY_PROVIDER
+        ? await runAntigravity(agent, prompt, runtime.cwd)
+        : agent.provider === AGENT_ROOM_CODEX_PROVIDER
+          ? await runCodex(agent, prompt, runtime.cwd)
+          : await runHost(agent, prompt, runtime.cwd)
       updateArtifact({ ...artifact, status: 'completed', output, completedAt: Date.now() })
       return output
     } catch (reason) {
@@ -594,7 +649,7 @@ export function AgentRoom({
         </div>
         <div className="agent-room-actions">
           {room.running ? <button type="button" className="agent-stop-button" onClick={() => { void handleStop() }}><Icon name="stop" size={12} /> Stop room</button> : <button type="button" className="agent-run-button" onClick={() => { void handleRun() }} disabled={room.task.trim() === '' || room.agents.filter(agent => agent.role !== 'judge').length < 2}><Icon name="sparkles" size={13} /> Run adversarial audit</button>}
-          <span>{tr('Codex reviewers can use true read-only sandboxes. DeepSeek displays the Local Host permission actually in effect.', 'Codex 审查者可使用真实只读沙箱；DeepSeek 显示 Local Host 当前真正生效的权限。')}</span>
+          <span>{tr('Codex and Antigravity expose their real sandbox modes. DeepSeek displays the Local Host permission actually in effect.', 'Codex 与 Antigravity 显示真实沙箱模式；DeepSeek 显示 Local Host 当前真正生效的权限。')}</span>
         </div>
         {error !== undefined && <p className="agent-room-error">{error}</p>}
       </section>

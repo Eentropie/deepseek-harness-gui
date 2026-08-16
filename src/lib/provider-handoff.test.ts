@@ -3,6 +3,7 @@ import type { ConversationMessage } from './types.ts'
 import {
   collectProviderHandoff,
   isProviderHandoffText,
+  mergeAllProviderTranscripts,
   mergeProviderTranscripts,
   providerHandoffText,
   visibleProviderText,
@@ -55,6 +56,11 @@ describe('provider handoff', () => {
       ['codex:1', undefined],
       ['codex:2', 'Codex'],
     ])
+  })
+
+  it('keeps Antigravity isolated in the unified transcript', () => {
+    const merged = mergeAllProviderTranscripts([], [], [{ ...message(1, 'assistant', 'Gemini answer', 15), agent: 'Antigravity' }])
+    expect(merged.map(item => [item.id, item.agent])).toEqual([['antigravity:1', 'Antigravity']])
   })
 
   it('keeps renderer-only network policy messages out of visible chat', () => {

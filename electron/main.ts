@@ -18,6 +18,7 @@ import {
 import WebSocket from 'ws'
 import { PluginController, resolveHostOrigin } from '../server/plugin-control.ts'
 import { CodexAppServer } from './codex-app-server.ts'
+import { AntigravityCli } from './antigravity-cli.ts'
 import { DeepSeekBillingService } from './deepseek-billing.ts'
 import { assertDesktopRpcPayload } from './rpc-policy.ts'
 import { SetupService } from './setup-service.ts'
@@ -658,10 +659,22 @@ async function reviewSnapshot(cwd: string): Promise<ReviewSnapshot> {
 function installIpc(
   controller: PluginController,
   codex: CodexAppServer,
+  antigravity: AntigravityCli,
   billing: DeepSeekBillingService,
   setup: SetupService,
   downlinks: (event: IpcMainInvokeEvent) => DownlinkClient | undefined,
 ): void {
+  const combinedPlugins = async () => {
+    const [hostResult, antigravityResult] = await Promise.allSettled([controller.list(), antigravity.plugins()])
+    if (hostResult.status === 'rejected' && antigravityResult.status === 'rejected') throw hostResult.reason
+    const hostSnapshot = hostResult.status === 'fulfilled' ? hostResult.value : undefined
+    const antigravitySnapshot = antigravityResult.status === 'fulfilled' ? antigravityResult.value : undefined
+    return {
+      profile: antigravitySnapshot === undefined ? hostSnapshot?.profile ?? 'Unavailable' : `${hostSnapshot?.profile ?? 'Host offline'} + Antigravity CLI`,
+      configFile: [hostSnapshot?.configFile, antigravitySnapshot?.configFile].filter(Boolean).join(' · '),
+      entries: [...(hostSnapshot?.entries ?? []), ...(antigravitySnapshot?.entries ?? [])],
+    }
+  }
   ipcMain.handle('dsh:rpc', async (event, method: unknown, payload: unknown) => {
     assertTrustedSender(event)
     if (typeof method !== 'string') throw new Error('RPC method must be a string')
@@ -678,12 +691,17 @@ function installIpc(
   })
   ipcMain.handle('dsh:plugins', async event => {
     assertTrustedSender(event)
-    return controller.list()
+    return combinedPlugins()
   })
   ipcMain.handle('dsh:toggle-plugin', async (event, entryId: unknown, enabled: unknown) => {
     assertTrustedSender(event)
     if (typeof entryId !== 'string' || typeof enabled !== 'boolean') throw new Error('Plugin toggle fields are invalid')
-    return controller.toggle(entryId, enabled)
+    if (entryId.startsWith('antigravity:')) {
+      const result = await antigravity.togglePlugin(entryId, enabled)
+      return { ...result, snapshot: await combinedPlugins() }
+    }
+    const result = await controller.toggle(entryId, enabled)
+    return { ...result, snapshot: await combinedPlugins() }
   })
   ipcMain.handle('dsh:connection-state', event => {
     assertTrustedSender(event)
@@ -833,6 +851,45 @@ function installIpc(
     }
     codex.respondApproval(requestIdentifier(requestId), decision)
   })
+  ipcMain.handle('dsh:antigravity-catalog', async (event, refresh: unknown) => {
+    assertTrustedSender(event)
+    if (refresh !== undefined && typeof refresh !== 'boolean') throw new Error('Antigravity catalog refresh flag is invalid')
+    return antigravity.catalog(refresh === true)
+  })
+  ipcMain.handle('dsh:antigravity-prompt', async (event, raw: unknown) => {
+    assertTrustedSender(event)
+    const payload = object(raw)
+    const sessionId = requiredString(payload['sessionId'], 'sessionId')
+    const cwd = requiredString(payload['cwd'], 'cwd')
+    await assertCodexWorkspace(sessionId, cwd)
+    const permission = requiredString(payload['permission'], 'permission')
+    if (permission !== 'read-only' && permission !== 'workspace-write' && permission !== 'full-access') {
+      throw new Error('Antigravity permission is invalid')
+    }
+    return antigravity.prompt({
+      sessionId,
+      ...(payload['conversationId'] === undefined ? {} : { conversationId: requiredString(payload['conversationId'], 'conversationId') }),
+      cwd,
+      model: requiredString(payload['model'], 'model'),
+      effort: requiredString(payload['effort'], 'effort'),
+      permission,
+      network: (() => {
+        const value = requiredString(payload['network'], 'network')
+        if (value !== 'off' && value !== 'auto') throw new Error('network must be off or auto')
+        return value
+      })(),
+      prompt: requiredString(payload['prompt'], 'prompt'),
+      ...(payload['context'] === undefined ? {} : { context: optionalHandoffMessages(payload['context']) }),
+    })
+  })
+  ipcMain.handle('dsh:antigravity-read-thread', async (event, conversationId: unknown) => {
+    assertTrustedSender(event)
+    return antigravity.readThread(requiredString(conversationId, 'conversationId'))
+  })
+  ipcMain.handle('dsh:antigravity-interrupt', async (event, conversationId: unknown, turnId: unknown) => {
+    assertTrustedSender(event)
+    antigravity.interrupt(requiredString(conversationId, 'conversationId'), requiredString(turnId, 'turnId'))
+  })
   ipcMain.handle('dsh:setup-inspect', async event => {
     assertTrustedSender(event)
     return setup.inspect()
@@ -847,7 +904,7 @@ function installIpc(
   })
   ipcMain.handle('dsh:setup-open-external', async (event, target: unknown) => {
     assertTrustedSender(event)
-    if (target !== 'deepseek-key' && target !== 'node' && target !== 'codex-install') throw new Error('Unknown setup link')
+    if (target !== 'deepseek-key' && target !== 'node' && target !== 'codex-install' && target !== 'antigravity-install') throw new Error('Unknown setup link')
     await setup.openExternal(target)
   })
   ipcMain.handle('dsh:setup-open-codex-login', async event => {
@@ -1037,6 +1094,7 @@ function createMainWindow(initialSessionId?: string): BrowserWindow {
 }
 
 let codexServer: CodexAppServer | undefined
+let antigravityCli: AntigravityCli | undefined
 let setupService: SetupService | undefined
 const singleInstanceLock = app.requestSingleInstanceLock()
 
@@ -1092,7 +1150,12 @@ if (!singleInstanceLock) {
       if (!window.isDestroyed()) window.webContents.send('dsh:codex-event', event)
     })
   })
-  installIpc(controller, codexServer, billing, setupService, event => downlinkClients.get(event.sender.id))
+  antigravityCli = new AntigravityCli(join(userDataPath, 'antigravity-sessions.json'), event => {
+    BrowserWindow.getAllWindows().forEach(window => {
+      if (!window.isDestroyed()) window.webContents.send('dsh:antigravity-event', event)
+    })
+  })
+  installIpc(controller, codexServer, antigravityCli, billing, setupService, event => downlinkClients.get(event.sender.id))
   app.setAsDefaultProtocolClient(APP_SCHEME)
   createMainWindow(pendingDeeplinks.shift())
   pendingDeeplinks.splice(0).forEach(sessionId => createMainWindow(sessionId))
@@ -1114,6 +1177,8 @@ app.on('before-quit', () => {
   for (const owner of new Set([...terminalProcesses.values()].map(item => item.owner))) stopTerminalProcesses(owner)
   codexServer?.shutdown()
   codexServer = undefined
+  antigravityCli?.shutdown()
+  antigravityCli = undefined
   setupService?.shutdown()
   setupService = undefined
 })

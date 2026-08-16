@@ -251,11 +251,12 @@ export class SetupService {
     this.publish({ type: 'host-state', running: false, message: 'Stopping the app-managed Local Host…' })
   }
 
-  async openExternal(target: 'deepseek-key' | 'node' | 'codex-install'): Promise<void> {
+  async openExternal(target: 'deepseek-key' | 'node' | 'codex-install' | 'antigravity-install'): Promise<void> {
     const urls = {
       'deepseek-key': 'https://platform.deepseek.com/api_keys',
       node: 'https://nodejs.org/en/download',
       'codex-install': 'https://developers.openai.com/codex/cli/',
+      'antigravity-install': 'https://www.antigravity.google/product/antigravity-cli',
     } as const
     await shell.openExternal(urls[target])
   }

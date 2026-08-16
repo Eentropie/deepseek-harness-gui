@@ -10,8 +10,10 @@ DeepSeek Harness.app / DeepSeek Harness.exe
         │       ├── 会话、插件、设置、工作文件夹
         │       └── Host 配置与凭据
         │
-        └── Codex bridge：通过 stdio 启动本机 `codex app-server`
-                └── Codex 账号、模型、审批与沙箱
+        ├── Codex bridge：通过 stdio 启动本机 `codex app-server`
+        │       └── Codex 账号、模型、审批与沙箱
+        └── Antigravity bridge：启动本机 `agy --output-format stream-json`
+                └── Google 账号、模型目录、工具与 CLI 会话
 ```
 
 上游 Harness 仓库和原有浏览器界面仍然在 `http://127.0.0.1:3080`。关闭 GUI 不会删除 `~/.dsh` 数据；用户在外部启动的 Host 会继续运行，由首次向导启动并托管的 Host 会在桌面应用完全退出时停止。
@@ -22,10 +24,10 @@ DeepSeek Harness.app / DeepSeek Harness.exe
 
 从[最新 Release](https://github.com/Eentropie/deepseek-harness-gui/releases/latest)下载：
 
-- **macOS Apple Silicon：** 下载 `DeepSeek-Harness-0.2.1-arm64.dmg` 或 `.zip`，打开 `DeepSeek Harness.app`。未签名包首次可能需要右键/Control-click → **Open**。
-- **Windows x64：** 下载并运行 `DeepSeek-Harness-0.2.1-Windows-x64.exe`。NSIS 安装器支持选择目录、桌面快捷方式和开始菜单项；未签名包可能触发 Windows SmartScreen。
+- **macOS Apple Silicon：** 下载 `DeepSeek-Harness-0.3.0-arm64.dmg` 或 `.zip`，打开 `DeepSeek Harness.app`。未签名包首次可能需要右键/Control-click → **Open**。
+- **Windows x64：** 下载并运行 `DeepSeek-Harness-0.3.0-Windows-x64.exe`。NSIS 安装器支持选择目录、桌面快捷方式和开始菜单项；未签名包可能触发 Windows SmartScreen。
 
-首次打开会出现配置向导：检查 Node.js、发现已有 Harness checkout 或 npm 安装、启动 Local Host、为 DeepSeek 或其他 Host Provider 单向写入 API 凭据、检测 Codex CLI/登录，并执行最终环境检查。Setup 不再选择工作文件夹；进入主界面后再按需添加。
+首次打开会出现配置向导：检查 Node.js、发现已有 Harness checkout 或 npm 安装、启动 Local Host、为 DeepSeek 或其他 Host Provider 单向写入 API 凭据、检测 Codex 与 Antigravity CLI/登录，并执行最终环境检查。Setup 不再选择工作文件夹；进入主界面后再按需添加。
 
 ### 自动或手动启动 Local Host
 
@@ -54,7 +56,7 @@ corepack pnpm dsh web
 3. 点击 **New session**。
 4. 在输入框下方选择模型、推理强度和权限档位，输入消息后发送。
 
-工作文件夹是 Harness 工具和 Codex `workspace-write` 的边界，不等于 Host 仓库目录。你可以让 GUI 操作任意项目，而不需要移动或修改 Host 源码。
+工作文件夹是 Harness 工具以及 Codex/Antigravity 桥接的边界，不等于 Host 仓库目录。你可以让 GUI 操作任意项目，而不需要移动或修改 Host 源码。
 
 ## 2. 接入 DeepSeek API
 
@@ -199,7 +201,42 @@ $env:DEEPSEEK_WORKBENCH_CODEX_BIN = "$env:APPDATA\npm\codex.cmd"
 | `approve-for-me` | 由配置的自动审查器处理需要审批的操作。 | 以当前工作文件夹为根的 `workspace-write`。 |
 | `full-access` | 此桥接层不再弹审批。 | Codex `danger-full-access`；只对可信目录使用。 |
 
-## 4. 其他模型提供方与外部 Agent
+## 4. 接入 Antigravity CLI 外部 Agent
+
+桌面应用会发现官方 `agy` 可执行文件、读取 `agy models`，并以稳定的 NDJSON print mode 启动每一轮。Google 登录和工具运行时仍归 Antigravity CLI 所有；GUI 只持久化自己投影出的消息，用于在当前桌面会话中恢复对话。
+
+macOS/Linux 使用官方安装方式，并在 `agy` 中完成 Google 登录：
+
+```sh
+curl -fsSL https://antigravity.google/cli/install.sh | bash
+agy
+```
+
+随后验证：
+
+```sh
+agy --version
+agy models
+agy plugins list
+```
+
+GUI 会依次检查 `DEEPSEEK_HARNESS_ANTIGRAVITY_BIN`、`~/.local/bin/agy`、Homebrew 目录和 `PATH`。Windows 还会检查 `%USERPROFILE%\.local\bin\agy.exe`、`%LOCALAPPDATA%\agy\bin\agy.exe`、Program Files 与 `PATH`。安装或修改覆盖路径后需要重启应用。
+
+模型选择器会把按推理强度拆开的 ID 合并为一个模型，只显示账号实际返回的档位。模型、强度、权限和联网策略均在下一轮热切换；运行中继续发送会进入队列，**Stop** 会终止当前 GUI 所属的 CLI 进程。
+
+| Antigravity 权限 | CLI 映射 | 实际边界 |
+| --- | --- | --- |
+| `read-only` | `--mode plan --sandbox` | CLI 沙箱中的规划/只读路径。 |
+| `workspace-write` | `--mode accept-edits --sandbox --dangerously-skip-permissions` | 以当前工作文件夹为根的可写 CLI 沙箱。 |
+| `full-access` | `--mode accept-edits --dangerously-skip-permissions` | 不启用 CLI 沙箱；只用于可信目录。 |
+
+Antigravity 的 headless print mode 不会暂停等待人工审批；需要交互审批的操作会被软拒绝。因此 GUI 不会为它伪造 **Ask for approval**。同样，**Web off** 是逐轮提示策略，不是操作系统防火墙；需要硬联网隔离时应使用外部沙箱。
+
+**Usage & billing** 会显示连接状态、CLI 版本和模型数量。当前 headless CLI 没有稳定的额度/余额接口，所以 GUI 不会虚构剩余额度。已经导入 Antigravity 的插件会出现在插件管理器，并通过 `agy plugins` 开关；若 `agy plugins list` 为空，则不会出现占位条目。
+
+官方参考：[Antigravity CLI](https://www.antigravity.google/product/antigravity-cli)、[CLI reference](https://www.antigravity.google/docs/cli-reference)、[权限](https://www.antigravity.google/docs/cli/permissions)、[会话](https://www.antigravity.google/docs/cli-conversations)。
+
+## 5. 其他模型提供方与外部 Agent
 
 ### OpenAI 兼容网关
 
@@ -241,7 +278,7 @@ corepack pnpm dsh web
 
 ### Claude Code、OpenCode 等 Agent CLI
 
-当前版本**不会自动启动任意 Agent 二进制文件**。GUI 能识别 Codex，是因为 Codex 提供了 App Server 协议；仅安装 `claude`、`opencode` 或其他 CLI 不会自动出现在模型选择器中。
+当前版本**不会自动启动任意 Agent 二进制文件**。GUI 只识别 Codex App Server 和 Antigravity 的稳定 `stream-json` 协议；仅安装 `claude`、`opencode` 或其他未适配 CLI 不会自动出现在模型选择器中。
 
 目前有三种接入方式：
 
@@ -249,9 +286,9 @@ corepack pnpm dsh web
 2. 如果它提供兼容 HTTP API，并且 Host 有对应适配器，将它作为模型提供方路由接入；
 3. 为它实现桌面适配器，将其流式输出、工具调用、审批、thread 和 interrupt 协议映射到 GUI 桥接协议。
 
-不要把非 Codex 可执行文件填到 `DEEPSEEK_WORKBENCH_CODEX_BIN`；这个变量只用于 Codex CLI。未知 Agent 可能获得工作文件夹、文件和权限，而 GUI 无法验证它是否遵守 Codex 沙箱契约，因此不会盲目启动。
+不要把无关可执行文件填到 `DEEPSEEK_WORKBENCH_CODEX_BIN` 或 `DEEPSEEK_HARNESS_ANTIGRAVITY_BIN`。未知 Agent 可能获得工作文件夹、文件和权限，而 GUI 无法验证它是否遵守对应契约，因此不会盲目启动。
 
-## 5. 工作文件夹、会话、插件与 Settings
+## 6. 工作文件夹、会话、插件与 Settings
 
 - **工作文件夹：** `Command-O` / `Ctrl+O`，或侧栏 **Open folder…**。切换工作文件夹不会移动 Host。
 - **会话：** 侧栏/命令面板支持新建、重命名、置顶、归档、fork、导出和删除。Host 当前没有永久删除 API，GUI 删除不会抹掉 Host 日志。
@@ -259,7 +296,7 @@ corepack pnpm dsh web
 - **Agent presets：** **Settings → Agent presets** 修改后续新会话的默认组合，不会重组已有会话。
 - **Appearance：** **Settings → Appearance** 支持跟随系统、浅色、深色、密度、Serif 回复和减少动画。
 
-## 6. 常见问题
+## 7. 常见问题
 
 | 现象 | 检查 |
 | --- | --- |
@@ -270,6 +307,9 @@ corepack pnpm dsh web
 | Codex 没出现在列表 | 先执行 `codex --version`、`codex --login`，再设置 `DEEPSEEK_WORKBENCH_CODEX_BIN` 绝对路径并重启 GUI。 |
 | Codex 没有模型 | CLI 未登录、账号没有可用目录，或 CLI 太旧；先在同一个终端执行 `codex` 验证。 |
 | Codex 审批行为不符合预期 | 检查权限档位和当前工作文件夹；`full-access` 明显宽于 workspace-write。 |
+| 模型列表里没有 Antigravity | 执行 `agy --version`、`agy models` 并完成 Google 登录，然后重启 GUI；仍无法发现时，把 `DEEPSEEK_HARNESS_ANTIGRAVITY_BIN` 设为可执行文件绝对路径。 |
+| Antigravity 没有模型 | 先交互运行一次 `agy` 完成登录。`agy models` 没有返回可用目录时，GUI 会隐藏该来源。 |
+| Antigravity 拒绝某个操作 | Headless print mode 无法暂停等人工批准。只在适当时选择真实的 workspace-write/full-access，或在交互式 `agy` 中执行。 |
 | Windows 启动即退出 | 必须完整解压 `win-unpacked`，让 `.exe` 与 `resources`、DLL 位于原目录。 |
 
 ## 安全边界
@@ -277,4 +317,5 @@ corepack pnpm dsh web
 - Local Host 继续只监听回环地址，GUI 不替换它。
 - API key 通过桌面桥单向传递；桌面余额 key 使用系统安全存储，Host key 由 Host credentials service 管理。
 - Codex Token 始终由 Codex CLI 管理，GUI 只启动本机 app-server。
+- Antigravity 登录凭据始终由官方 CLI 管理；GUI 只启动 `agy`，不读取或复制 Google 凭据。
 - Release 未签名。对敏感目录使用 Agent 前，先核对 Release SHA-256 并确认权限档位。

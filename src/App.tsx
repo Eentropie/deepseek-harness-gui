@@ -18,7 +18,7 @@ import {
 } from './components/SettingsPanel.tsx'
 import { Sidebar } from './components/Sidebar.tsx'
 import { TerminalDock } from './components/TerminalDock.tsx'
-import { codexApi, harnessApi, subscribeCodex, subscribeDownlinks } from './lib/api.ts'
+import { antigravityApi, codexApi, harnessApi, subscribeAntigravity, subscribeCodex, subscribeDownlinks } from './lib/api.ts'
 import { persistentHostPermission, type ApprovalChoice } from './lib/approval.ts'
 import { applyCodexDeltas, applyCodexToolEvent, type CodexDeltaEvent } from './lib/codex-stream.ts'
 import {
@@ -35,7 +35,7 @@ import {
 import { chooseGreeting } from './lib/greetings.ts'
 import {
   collectProviderHandoff,
-  mergeProviderTranscripts,
+  mergeAllProviderTranscripts,
   providerHandoffText,
 } from './lib/provider-handoff.ts'
 import {
@@ -54,6 +54,9 @@ import { platformBasename as basename, shortcutLabel } from './lib/platform.ts'
 import type {
   GoalProjection,
   HistoryPage,
+  AntigravityCatalog,
+  AntigravityEvent,
+  AntigravityPermissionMode,
   CodexCatalog,
   CodexEvent,
   CodexPermissionMode,
@@ -86,12 +89,19 @@ type ConnectionState = 'connecting' | 'connected' | 'reconnecting'
 
 const EMPTY_HISTORY: HistoryPage = { events: [], hasMore: false }
 const CODEX_PROVIDER = 'codex-cli'
+const ANTIGRAVITY_PROVIDER = 'antigravity-cli'
 const DEFAULT_CODEX_PERMISSION: CodexPermissionMode = 'ask-for-approval'
 const CODEX_PERMISSION_OPTIONS: PermissionOption[] = [
   { value: 'read-only', name: 'Read only', description: 'Use the real Codex read-only sandbox for the turn.' },
   { value: 'ask-for-approval', name: 'Ask for approval', description: 'Ask you before privileged commands or sandbox escapes.' },
   { value: 'approve-for-me', name: 'Approve for me', description: 'Route approval requests to the Codex automatic reviewer.' },
   { value: 'full-access', name: 'Full access', description: 'Run without approval prompts or filesystem sandboxing.' },
+]
+const DEFAULT_ANTIGRAVITY_PERMISSION: AntigravityPermissionMode = 'read-only'
+const ANTIGRAVITY_PERMISSION_OPTIONS: PermissionOption[] = [
+  { value: 'read-only', name: 'Read only', description: 'Use Antigravity plan mode inside its filesystem sandbox.' },
+  { value: 'workspace-write', name: 'Write in workspace', description: 'Use accept-edits inside Antigravity\'s filesystem sandbox.' },
+  { value: 'full-access', name: 'Full access', description: 'Use accept-edits without Antigravity filesystem sandboxing.' },
 ]
 const HOST_PERMISSION_OPTIONS: PermissionOption[] = [
   { value: 'read-only', name: 'Read only', description: 'Allow inspection without writing workspace files.' },
@@ -110,6 +120,7 @@ const TERMINAL_OPEN_STORAGE_KEY = 'dsh-workbench-terminal-open'
 const ONBOARDING_STORAGE_KEY = 'dsh-workbench-onboarding-v1'
 const NETWORK_MODES_STORAGE_KEY = 'dsh-workbench-network-modes-v1'
 const CODEX_QUEUES_STORAGE_KEY = 'dsh-workbench-codex-queues-v1'
+const ANTIGRAVITY_QUEUES_STORAGE_KEY = 'dsh-workbench-antigravity-queues-v1'
 interface CodexSessionState {
   active: boolean
   threadId?: string
@@ -118,6 +129,14 @@ interface CodexSessionState {
   permission?: CodexPermissionMode
   codexImportedHostSeq?: number
   deepSeekImportedCodexSeq?: number
+}
+
+interface AntigravitySessionState {
+  active: boolean
+  conversationId?: string
+  model?: string
+  effort?: string
+  permission?: AntigravityPermissionMode
 }
 
 interface PendingSession {
@@ -138,6 +157,17 @@ interface CodexQueuedPrompt {
   createdAt: number
 }
 
+interface AntigravityQueuedPrompt {
+  id: string
+  prompt: string
+  cwd: string
+  model: string
+  effort: string
+  permission: AntigravityPermissionMode
+  network: EffectiveNetworkMode
+  createdAt: number
+}
+
 interface SidechatSelection {
   provider: string
   model: string
@@ -149,6 +179,7 @@ interface SidechatSelection {
 const DEFAULT_SIDECHAT_THREAD: SidechatThreadSummary = { id: 'main', title: 'Sidechat 1' }
 
 const EMPTY_CODEX_SESSION: CodexSessionState = { active: false, permission: DEFAULT_CODEX_PERMISSION }
+const EMPTY_ANTIGRAVITY_SESSION: AntigravitySessionState = { active: false, permission: DEFAULT_ANTIGRAVITY_PERMISSION }
 
 function codexSessionKey(sessionId: string): string {
   return `dsh-workbench-codex-session:${sessionId}`
@@ -183,6 +214,35 @@ function readCodexSession(sessionId: string): CodexSessionState {
 
 function writeCodexSession(sessionId: string, state: CodexSessionState): void {
   localStorage.setItem(codexSessionKey(sessionId), JSON.stringify(state))
+}
+
+function antigravitySessionKey(sessionId: string): string {
+  return `dsh-workbench-antigravity-session:${sessionId}`
+}
+
+function readAntigravitySession(sessionId: string): AntigravitySessionState {
+  try {
+    const value = JSON.parse(localStorage.getItem(antigravitySessionKey(sessionId)) ?? 'null') as unknown
+    if (typeof value !== 'object' || value === null) return EMPTY_ANTIGRAVITY_SESSION
+    const record = value as Record<string, unknown>
+    const rawPermission = record['permission']
+    const permission: AntigravityPermissionMode = rawPermission === 'workspace-write' || rawPermission === 'full-access'
+      ? rawPermission
+      : 'read-only'
+    return {
+      active: record['active'] === true,
+      ...(typeof record['conversationId'] === 'string' ? { conversationId: record['conversationId'] } : {}),
+      ...(typeof record['model'] === 'string' ? { model: record['model'] } : {}),
+      ...(typeof record['effort'] === 'string' ? { effort: record['effort'] } : {}),
+      permission,
+    }
+  } catch {
+    return EMPTY_ANTIGRAVITY_SESSION
+  }
+}
+
+function writeAntigravitySession(sessionId: string, state: AntigravitySessionState): void {
+  localStorage.setItem(antigravitySessionKey(sessionId), JSON.stringify(state))
 }
 
 function readSidechatSelection(sessionId: string): SidechatSelection | undefined {
@@ -333,6 +393,35 @@ function storedCodexQueues(): Record<string, CodexQueuedPrompt[]> {
   }
 }
 
+function storedAntigravityQueues(): Record<string, AntigravityQueuedPrompt[]> {
+  try {
+    const value = JSON.parse(localStorage.getItem(ANTIGRAVITY_QUEUES_STORAGE_KEY) ?? '{}') as unknown
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+    const queues: Record<string, AntigravityQueuedPrompt[]> = {}
+    for (const [sessionId, rawItems] of Object.entries(value as Record<string, unknown>)) {
+      if (!Array.isArray(rawItems)) continue
+      const items = rawItems.flatMap(raw => {
+        if (typeof raw !== 'object' || raw === null) return []
+        const item = raw as Record<string, unknown>
+        const permission = item['permission']
+        const network = item['network']
+        if (typeof item['id'] !== 'string' || typeof item['prompt'] !== 'string' || item['prompt'].trim() === ''
+          || typeof item['cwd'] !== 'string' || typeof item['model'] !== 'string' || typeof item['effort'] !== 'string'
+          || (permission !== 'read-only' && permission !== 'workspace-write' && permission !== 'full-access')
+          || (network !== 'off' && network !== 'auto')) return []
+        return [{
+          id: item['id'], prompt: item['prompt'], cwd: item['cwd'], model: item['model'], effort: item['effort'],
+          permission, network, createdAt: typeof item['createdAt'] === 'number' ? item['createdAt'] : Date.now(),
+        } satisfies AntigravityQueuedPrompt]
+      }).slice(0, 40)
+      if (items.length > 0) queues[sessionId] = items
+    }
+    return queues
+  } catch {
+    return {}
+  }
+}
+
 function queuedPreview(value: string): string {
   const compact = value.replace(/\s+/g, ' ').trim()
   return Array.from(compact).length > 200 ? `${Array.from(compact).slice(0, 200).join('')}…` : compact
@@ -392,6 +481,12 @@ export function App() {
   const [codexRunning, setCodexRunning] = useState(false)
   const [codexTurnId, setCodexTurnId] = useState<string>()
   const [codexEffectivePermission, setCodexEffectivePermission] = useState<CodexPermissionMode>()
+  const [antigravityCatalog, setAntigravityCatalog] = useState<AntigravityCatalog>({ available: false, authenticatedWith: 'Google', models: [] })
+  const [antigravitySession, setAntigravitySession] = useState<AntigravitySessionState>(EMPTY_ANTIGRAVITY_SESSION)
+  const [antigravityMessages, setAntigravityMessages] = useState<ConversationMessage[]>([])
+  const [antigravityRunning, setAntigravityRunning] = useState(false)
+  const [antigravityTurnId, setAntigravityTurnId] = useState<string>()
+  const [antigravityEffectivePermission, setAntigravityEffectivePermission] = useState<AntigravityPermissionMode>()
   const [connection, setConnection] = useState<ConnectionState>('connecting')
   const [chromeLoading, setChromeLoading] = useState(true)
   const [historyLoading, setHistoryLoading] = useState(false)
@@ -405,6 +500,7 @@ export function App() {
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const [queueBySession, setQueueBySession] = useState<Record<string, QueueItem[]>>({})
   const [codexQueues, setCodexQueues] = useState<Record<string, CodexQueuedPrompt[]>>(storedCodexQueues)
+  const [antigravityQueues, setAntigravityQueues] = useState<Record<string, AntigravityQueuedPrompt[]>>(storedAntigravityQueues)
   const [jobsBySession, setJobsBySession] = useState<Record<string, JobView[]>>({})
   const [searchHits, setSearchHits] = useState<SessionSearchHit[]>([])
   const [searching, setSearching] = useState(false)
@@ -468,12 +564,20 @@ export function App() {
   const codexTurnIdRef = useRef<string>()
   const codexQueuesRef = useRef(codexQueues)
   const codexDrainInFlight = useRef(new Set<string>())
+  const antigravityDeltaQueue = useRef<Array<Extract<AntigravityEvent, { type: 'assistant-delta' | 'reasoning-delta' }>>>([])
+  const antigravityDeltaTimer = useRef<number>()
+  const antigravityRunningRef = useRef(false)
+  const antigravityTurnIdRef = useRef<string>()
+  const antigravityQueuesRef = useRef(antigravityQueues)
+  const antigravityDrainInFlight = useRef(new Set<string>())
   const sidechatOwnerRef = useRef<string>()
   const sidechatCodexActiveRef = useRef(false)
+  const sidechatAntigravityActiveRef = useRef(false)
   const sidechatGeneration = useRef(0)
   const providerTranscriptCache = useRef<Record<string, {
     deepSeek: ConversationMessage[]
     codex: ConversationMessage[]
+    antigravity: ConversationMessage[]
   }>>({})
   const dark = themeMode === 'dark' || (themeMode === 'system' && systemDark)
   const startupGreeting = useMemo(() => {
@@ -565,20 +669,22 @@ export function App() {
     })
     return changed ? withAttachments : projected
   }, [attachmentSources, history.events, selectedId, subagentView?.childSessionId])
-  let providerCache: { deepSeek: ConversationMessage[]; codex: ConversationMessage[] } | undefined
+  let providerCache: { deepSeek: ConversationMessage[]; codex: ConversationMessage[]; antigravity: ConversationMessage[] } | undefined
   if (selectedId !== undefined) {
-    providerCache = providerTranscriptCache.current[selectedId] ?? { deepSeek: [], codex: [] }
+    providerCache = providerTranscriptCache.current[selectedId] ?? { deepSeek: [], codex: [], antigravity: [] }
     if (messages.length > 0) providerCache.deepSeek = messages
     if (codexMessages.length > 0) providerCache.codex = codexMessages
+    if (antigravityMessages.length > 0) providerCache.antigravity = antigravityMessages
     providerTranscriptCache.current[selectedId] = providerCache
   }
   const retainedDeepSeekMessages = messages.length > 0 ? messages : providerCache?.deepSeek ?? []
   const retainedCodexMessages = codexMessages.length > 0 ? codexMessages : providerCache?.codex ?? []
+  const retainedAntigravityMessages = antigravityMessages.length > 0 ? antigravityMessages : providerCache?.antigravity ?? []
   const unifiedMessages = useMemo(
     () => subagentView === undefined
-      ? mergeProviderTranscripts(retainedDeepSeekMessages, retainedCodexMessages)
+      ? mergeAllProviderTranscripts(retainedDeepSeekMessages, retainedCodexMessages, retainedAntigravityMessages)
       : messages,
-    [messages, retainedCodexMessages, retainedDeepSeekMessages, subagentView],
+    [messages, retainedAntigravityMessages, retainedCodexMessages, retainedDeepSeekMessages, subagentView],
   )
   const conversationOwner = subagentView?.childSessionId ?? selectedId ?? pendingSession?.key ?? draftKey
   const networkOwner = selectedId ?? pendingSession?.key
@@ -624,6 +730,17 @@ export function App() {
           })),
         }]
       : []
+    const antigravityGroup = antigravityCatalog.available && antigravityCatalog.models.length > 0
+      ? [{
+          id: ANTIGRAVITY_PROVIDER,
+          name: 'Google · Antigravity CLI',
+          models: antigravityCatalog.models.map(model => ({
+            id: model.id,
+            name: model.name,
+            reasoning: { efforts: model.efforts, defaultEffort: model.defaultEffort },
+          })),
+        }]
+      : []
     const selectedCodexModel = codexCatalog.models.find(model => model.id === codexSession.model)
       ?? codexCatalog.models.find(model => model.isDefault)
       ?? codexCatalog.models[0]
@@ -633,25 +750,51 @@ export function App() {
         ? codexSession.effort
         : selectedCodexModel.defaultEffort
     const useCodex = codexSession.active && codexCatalog.available && selectedCodexModel !== undefined
+    const selectedAntigravityModel = antigravityCatalog.models.find(model => model.id === antigravitySession.model)
+      ?? antigravityCatalog.models.find(model => model.isDefault)
+      ?? antigravityCatalog.models[0]
+    const antigravityEffort = selectedAntigravityModel === undefined
+      ? undefined
+      : selectedAntigravityModel.efforts.some(effort => effort.id === antigravitySession.effort)
+        ? antigravitySession.effort
+        : selectedAntigravityModel.defaultEffort
+    const useAntigravity = antigravitySession.active && antigravityCatalog.available && selectedAntigravityModel !== undefined
     return {
       ...models,
-      current: useCodex
+      current: useAntigravity
+        ? {
+            provider: ANTIGRAVITY_PROVIDER,
+            model: selectedAntigravityModel.id,
+            ...(antigravityEffort === undefined ? {} : { reasoningEffort: antigravityEffort }),
+          }
+        : useCodex
         ? {
             provider: CODEX_PROVIDER,
             model: selectedCodexModel.id,
             ...(codexEffort === undefined ? {} : { reasoningEffort: codexEffort }),
           }
         : models.current,
-      routable: useCodex ? true : models.routable,
-      groups: [...models.groups, ...codexGroup],
-      failures: codexCatalog.error === undefined
-        ? models.failures
-        : [...models.failures, { id: CODEX_PROVIDER, name: 'Codex CLI', message: codexCatalog.error }],
+      routable: useCodex || useAntigravity ? true : models.routable,
+      groups: [...models.groups, ...codexGroup, ...antigravityGroup],
+      failures: [
+        ...models.failures,
+        ...(codexCatalog.error === undefined ? [] : [{ id: CODEX_PROVIDER, name: 'Codex CLI', message: codexCatalog.error }]),
+        ...(antigravityCatalog.error === undefined ? [] : [{ id: ANTIGRAVITY_PROVIDER, name: 'Antigravity CLI', message: antigravityCatalog.error }]),
+      ],
     }
-  }, [codexCatalog, codexSession, models])
+  }, [antigravityCatalog, antigravitySession, codexCatalog, codexSession, models])
   const codexActive = subagentView === undefined && presentedModels?.current.provider === CODEX_PROVIDER
+  const antigravityActive = subagentView === undefined && presentedModels?.current.provider === ANTIGRAVITY_PROVIDER
   const activeQueue = useMemo<QueueItem[]>(() => {
     if (selectedId === undefined || subagentView !== undefined) return []
+    if (antigravityActive) return (antigravityQueues[selectedId] ?? []).map(item => ({
+      id: item.id,
+      placement: 'queued',
+      content: [{ type: 'text', text: item.prompt }],
+      preview: queuedPreview(item.prompt),
+      text: item.prompt,
+      source: 'antigravity',
+    }))
     if (!codexActive) return queueBySession[selectedId] ?? []
     return (codexQueues[selectedId] ?? []).map(item => ({
       id: item.id,
@@ -661,14 +804,15 @@ export function App() {
       text: item.prompt,
       source: 'codex',
     }))
-  }, [codexActive, codexQueues, queueBySession, selectedId, subagentView])
+  }, [antigravityActive, antigravityQueues, codexActive, codexQueues, queueBySession, selectedId, subagentView])
   const codexPermission = codexSession.permission ?? DEFAULT_CODEX_PERMISSION
-  const presentedPermissionOptions = codexActive
-    ? CODEX_PERMISSION_OPTIONS
-    : permissions?.options ?? (pendingSession === undefined ? [] : HOST_PERMISSION_OPTIONS)
-  const presentedPermission = codexActive
-    ? codexPermission
-    : permissions?.currentValue ?? (pendingSession === undefined ? undefined : pendingHostPermission)
+  const antigravityPermission = antigravitySession.permission ?? DEFAULT_ANTIGRAVITY_PERMISSION
+  const presentedPermissionOptions = antigravityActive
+    ? ANTIGRAVITY_PERMISSION_OPTIONS
+    : codexActive ? CODEX_PERMISSION_OPTIONS : permissions?.options ?? (pendingSession === undefined ? [] : HOST_PERMISSION_OPTIONS)
+  const presentedPermission = antigravityActive
+    ? antigravityPermission
+    : codexActive ? codexPermission : permissions?.currentValue ?? (pendingSession === undefined ? undefined : pendingHostPermission)
   const sidechatThreads = useMemo(
     () => selectedId === undefined ? [] : sidechatThreadsByParent[selectedId] ?? [DEFAULT_SIDECHAT_THREAD],
     [selectedId, sidechatThreadsByParent],
@@ -687,6 +831,7 @@ export function App() {
     : sidechatHostSessions[sidechatOwner]
       ?? (activeSidechatId === DEFAULT_SIDECHAT_THREAD.id && selectedId !== undefined ? sidechatHostSessions[selectedId] : undefined)
   const sidechatCodexActive = sidechatSelection?.provider === CODEX_PROVIDER
+  const sidechatAntigravityActive = sidechatSelection?.provider === ANTIGRAVITY_PROVIDER
   const sidechatModelEntry = sidechatSelection === undefined
     ? undefined
     : presentedModels?.groups.find(group => group.id === sidechatSelection.provider)?.models.find(model => model.id === sidechatSelection.model)
@@ -700,9 +845,9 @@ export function App() {
           ...(sidechatSelection.effort === undefined ? {} : { reasoningEffort: sidechatSelection.effort }),
         },
       }
-  const sidechatPermissionOptions = sidechatCodexActive
-    ? CODEX_PERMISSION_OPTIONS
-    : permissions?.options ?? HOST_PERMISSION_OPTIONS
+  const sidechatPermissionOptions = sidechatAntigravityActive
+    ? ANTIGRAVITY_PERMISSION_OPTIONS
+    : sidechatCodexActive ? CODEX_PERMISSION_OPTIONS : permissions?.options ?? HOST_PERMISSION_OPTIONS
 
   useEffect(() => {
     if (selectedId === undefined) return
@@ -712,7 +857,7 @@ export function App() {
       const owner = sidechatOwnerId(selectedId, thread.id)
       const hostSessionId = sidechatHostSessions[owner]
         ?? (thread.id === DEFAULT_SIDECHAT_THREAD.id ? sidechatHostSessions[selectedId] : undefined)
-      return hostSessionId !== undefined || readCodexSession(owner).threadId !== undefined
+      return hostSessionId !== undefined || readCodexSession(owner).threadId !== undefined || readAntigravitySession(owner).conversationId !== undefined
     })
     if (reconciled.length === storedThreads.length) return
     const retained = new Set(reconciled.map(thread => thread.id))
@@ -734,6 +879,14 @@ export function App() {
         models: [],
         error: errorText(reason),
       })
+    }
+  }, [])
+
+  const refreshAntigravityCatalog = useCallback(async (force = false): Promise<void> => {
+    try {
+      setAntigravityCatalog(await antigravityApi.catalog(force))
+    } catch (reason) {
+      setAntigravityCatalog({ available: false, authenticatedWith: 'Google', models: [], error: errorText(reason) })
     }
   }, [])
 
@@ -790,12 +943,14 @@ export function App() {
       const effort = stored.effort !== undefined && efforts.some(item => item.id === stored.effort)
         ? stored.effort
         : storedModel.reasoning?.defaultEffort
-      const permissionOptions = stored.provider === CODEX_PROVIDER
-        ? CODEX_PERMISSION_OPTIONS
-        : permissions?.options ?? HOST_PERMISSION_OPTIONS
+      const permissionOptions = stored.provider === ANTIGRAVITY_PROVIDER
+        ? ANTIGRAVITY_PERMISSION_OPTIONS
+        : stored.provider === CODEX_PROVIDER ? CODEX_PERMISSION_OPTIONS : permissions?.options ?? HOST_PERMISSION_OPTIONS
       const permission = permissionOptions.some(option => option.value === stored.permission)
         ? stored.permission
-        : stored.provider === CODEX_PROVIDER ? DEFAULT_CODEX_PERMISSION : presentedPermission ?? DEFAULT_HOST_PERMISSION
+        : stored.provider === ANTIGRAVITY_PROVIDER
+          ? DEFAULT_ANTIGRAVITY_PERMISSION
+          : stored.provider === CODEX_PROVIDER ? DEFAULT_CODEX_PERMISSION : presentedPermission ?? DEFAULT_HOST_PERMISSION
       const next: SidechatSelection = {
         provider: stored.provider,
         model: stored.model,
@@ -812,12 +967,14 @@ export function App() {
       provider: current.provider,
       model: current.model,
       ...(current.reasoningEffort === undefined ? {} : { effort: current.reasoningEffort }),
-      permission: current.provider === CODEX_PROVIDER ? codexPermission : presentedPermission ?? DEFAULT_HOST_PERMISSION,
+      permission: current.provider === ANTIGRAVITY_PROVIDER
+        ? antigravityPermission
+        : current.provider === CODEX_PROVIDER ? codexPermission : presentedPermission ?? DEFAULT_HOST_PERMISSION,
       network: networkMode,
     }
     writeSidechatSelection(sidechatOwner, next)
     setSidechatSelection(next)
-  }, [activeSidechatId, codexPermission, networkMode, permissions?.options, presentedModels, presentedPermission, selectedId, sidechatOwner])
+  }, [activeSidechatId, antigravityPermission, codexPermission, networkMode, permissions?.options, presentedModels, presentedPermission, selectedId, sidechatOwner])
 
   useEffect(() => {
     if (pendingApprovals.length + pendingQuestions.length > 0) setInspectorOpen(true)
@@ -848,14 +1005,30 @@ export function App() {
   }, [codexQueues])
 
   useEffect(() => {
+    antigravityQueuesRef.current = antigravityQueues
+    try {
+      localStorage.setItem(ANTIGRAVITY_QUEUES_STORAGE_KEY, JSON.stringify(antigravityQueues))
+    } catch {
+      // Keep queued follow-ups in memory if local storage is temporarily unavailable.
+    }
+  }, [antigravityQueues])
+
+  useEffect(() => {
     void refreshCodexCatalog(true)
-  }, [refreshCodexCatalog])
+    void refreshAntigravityCatalog(true)
+  }, [refreshAntigravityCatalog, refreshCodexCatalog])
 
   useEffect(() => {
     if (codexCatalog.available) return
     const timer = window.setInterval(() => { void refreshCodexCatalog(true) }, 15_000)
     return () => window.clearInterval(timer)
   }, [codexCatalog.available, refreshCodexCatalog])
+
+  useEffect(() => {
+    if (antigravityCatalog.available) return
+    const timer = window.setInterval(() => { void refreshAntigravityCatalog(true) }, 15_000)
+    return () => window.clearInterval(timer)
+  }, [antigravityCatalog.available, refreshAntigravityCatalog])
 
   const flushCodexDeltas = useCallback((): void => {
     if (codexDeltaTimer.current !== undefined) window.clearTimeout(codexDeltaTimer.current)
@@ -948,8 +1121,84 @@ export function App() {
     }
   }, [updateCodexQueues])
 
+  const flushAntigravityDeltas = useCallback((): void => {
+    if (antigravityDeltaTimer.current !== undefined) window.clearTimeout(antigravityDeltaTimer.current)
+    antigravityDeltaTimer.current = undefined
+    if (antigravityDeltaQueue.current.length === 0) return
+    const events = antigravityDeltaQueue.current
+    antigravityDeltaQueue.current = []
+    setAntigravityMessages(current => applyCodexDeltas(current, events, Date.now(), { idPrefix: 'antigravity', agent: 'Antigravity' }))
+  }, [])
+
+  const queueAntigravityDelta = useCallback((event: Extract<AntigravityEvent, { type: 'assistant-delta' | 'reasoning-delta' }>): void => {
+    antigravityDeltaQueue.current.push(event)
+    if (antigravityDeltaTimer.current !== undefined) return
+    antigravityDeltaTimer.current = window.setTimeout(flushAntigravityDeltas, 48)
+  }, [flushAntigravityDeltas])
+
+  const updateAntigravityQueues = useCallback((update: (current: Record<string, AntigravityQueuedPrompt[]>) => Record<string, AntigravityQueuedPrompt[]>): void => {
+    const next = update(antigravityQueuesRef.current)
+    antigravityQueuesRef.current = next
+    setAntigravityQueues(next)
+  }, [])
+
+  const drainAntigravityQueue = useCallback(async (sessionId: string, conversationId: string, itemId?: string): Promise<boolean> => {
+    if (antigravityDrainInFlight.current.has(sessionId)) return false
+    const queue = antigravityQueuesRef.current[sessionId] ?? []
+    const item = itemId === undefined ? queue[0] : queue.find(candidate => candidate.id === itemId)
+    if (item === undefined) return false
+    antigravityDrainInFlight.current.add(sessionId)
+    const selected = selectedRef.current === sessionId
+    const optimisticId = `antigravity-queued-user-${item.id}`
+    try {
+      if (selected) {
+        antigravityRunningRef.current = true
+        setAntigravityEffectivePermission(item.permission)
+        setAntigravityRunning(true)
+        setAntigravityMessages(messages => [...messages, {
+          id: optimisticId, seq: (messages.at(-1)?.seq ?? 0) + 1, time: Date.now(), role: 'user', blocks: [{ kind: 'text', text: item.prompt }],
+        }])
+        setConversationScrollRequest(current => current + 1)
+      }
+      const result = await antigravityApi.prompt({
+        sessionId, conversationId, cwd: item.cwd, model: item.model, effort: item.effort,
+        permission: item.permission, network: item.network, prompt: item.prompt,
+      })
+      const state = readAntigravitySession(sessionId)
+      const next: AntigravitySessionState = {
+        ...state, active: true, conversationId: result.conversationId, model: item.model, effort: item.effort, permission: item.permission,
+      }
+      writeAntigravitySession(sessionId, next)
+      updateAntigravityQueues(current => {
+        const remaining = (current[sessionId] ?? []).filter(candidate => candidate.id !== item.id)
+        const { [sessionId]: _removed, ...rest } = current
+        return remaining.length === 0 ? rest : { ...rest, [sessionId]: remaining }
+      })
+      if (selectedRef.current === sessionId) {
+        setAntigravitySession(next)
+        antigravityRunningRef.current = true
+        antigravityTurnIdRef.current = result.turnId
+        setAntigravityTurnId(result.turnId)
+      }
+      return true
+    } catch (reason) {
+      if (selectedRef.current === sessionId) {
+        setAntigravityMessages(messages => messages.filter(message => message.id !== optimisticId))
+        antigravityRunningRef.current = false
+        antigravityTurnIdRef.current = undefined
+        setAntigravityRunning(false)
+        setAntigravityTurnId(undefined)
+        setActionError(`Antigravity 排队消息发送失败：${errorText(reason)}`)
+      }
+      return false
+    } finally {
+      antigravityDrainInFlight.current.delete(sessionId)
+    }
+  }, [updateAntigravityQueues])
+
   useEffect(() => () => {
     if (codexDeltaTimer.current !== undefined) window.clearTimeout(codexDeltaTimer.current)
+    if (antigravityDeltaTimer.current !== undefined) window.clearTimeout(antigravityDeltaTimer.current)
   }, [])
 
   useEffect(() => {
@@ -982,15 +1231,53 @@ export function App() {
   }, [pendingSession?.key, selectedId])
 
   useEffect(() => {
+    if (antigravityDeltaTimer.current !== undefined) window.clearTimeout(antigravityDeltaTimer.current)
+    antigravityDeltaTimer.current = undefined
+    antigravityDeltaQueue.current = []
+    setAntigravityMessages([])
+    antigravityRunningRef.current = false
+    antigravityTurnIdRef.current = undefined
+    setAntigravityRunning(false)
+    setAntigravityEffectivePermission(undefined)
+    setAntigravityTurnId(undefined)
+    const stateKey = selectedId ?? pendingSession?.key
+    if (stateKey === undefined) {
+      setAntigravitySession(EMPTY_ANTIGRAVITY_SESSION)
+      return
+    }
+    const state = readAntigravitySession(stateKey)
+    setAntigravitySession(state)
+    if (selectedId === undefined || state.conversationId === undefined) return
+    let active = true
+    void antigravityApi.readThread(state.conversationId).then(snapshot => {
+      if (active && selectedRef.current === selectedId) setAntigravityMessages(snapshot.messages)
+    }).catch(reason => {
+      if (active && state.active) setActionError(`Antigravity 会话读取失败：${errorText(reason)}`)
+    })
+    return () => { active = false }
+  }, [pendingSession?.key, selectedId])
+
+  useEffect(() => {
     const generation = ++sidechatGeneration.current
     sidechatOwnerRef.current = sidechatOwner
     sidechatCodexActiveRef.current = sidechatCodexActive
+    sidechatAntigravityActiveRef.current = sidechatAntigravityActive
     setSidechatMessages([])
     setSidechatRunning(false)
     setSidechatTurnId(undefined)
     setSidechatError(undefined)
     if (sidechatOwner === undefined) return
     let active = true
+    if (sidechatAntigravityActive) {
+      const state = readAntigravitySession(sidechatOwner)
+      if (state.conversationId === undefined) return () => { active = false }
+      void antigravityApi.readThread(state.conversationId).then(snapshot => {
+        if (active && generation === sidechatGeneration.current) setSidechatMessages(snapshot.messages)
+      }).catch(reason => {
+        if (active && generation === sidechatGeneration.current) setSidechatError(errorText(reason))
+      })
+      return () => { active = false }
+    }
     if (sidechatCodexActive) {
       const state = readCodexSession(sidechatOwner)
       if (state.threadId === undefined) return () => { active = false }
@@ -1010,7 +1297,7 @@ export function App() {
       if (active && generation === sidechatGeneration.current) setSidechatError(errorText(reason))
     })
     return () => { active = false }
-  }, [sidechatCodexActive, sidechatHostSessionId, sidechatOwner])
+  }, [sidechatAntigravityActive, sidechatCodexActive, sidechatHostSessionId, sidechatOwner])
 
   useEffect(() => subscribeCodex((event: CodexEvent) => {
     if (event.type === 'usage-updated') return
@@ -1125,6 +1412,96 @@ export function App() {
       setActionError(`Codex CLI：${event.message}`)
     }
   }), [drainCodexQueue, flushCodexDeltas, queueCodexDelta])
+
+  useEffect(() => subscribeAntigravity((event: AntigravityEvent) => {
+    const sessionId = event.sessionId
+    if (sessionId?.startsWith('sidechat:') === true) {
+      if (!sidechatAntigravityActiveRef.current || sessionId !== sidechatOwnerRef.current) return
+      if (event.type === 'turn-started') {
+        setSidechatRunning(true)
+        setSidechatTurnId(event.turnId)
+        return
+      }
+      if (event.type === 'assistant-delta' || event.type === 'reasoning-delta') {
+        setSidechatMessages(current => applyCodexDeltas(current, [event], Date.now(), { idPrefix: 'antigravity', agent: 'Antigravity' }))
+        return
+      }
+      if (event.type === 'tool-item') {
+        setSidechatMessages(current => applyCodexToolEvent(current, event, Date.now(), { idPrefix: 'antigravity', agent: 'Antigravity' }))
+        return
+      }
+      if (event.type === 'turn-completed') {
+        setSidechatTurnId(undefined)
+        if (event.status === 'failed') setSidechatError(event.error ?? 'Antigravity sidechat failed')
+        void antigravityApi.readThread(event.threadId).then(snapshot => {
+          if (event.sessionId === sidechatOwnerRef.current && sidechatAntigravityActiveRef.current) setSidechatMessages(snapshot.messages)
+        }).catch(reason => setSidechatError(errorText(reason))).finally(() => {
+          if (event.sessionId === sidechatOwnerRef.current) setSidechatRunning(false)
+        })
+        return
+      }
+      if (event.type === 'error') {
+        setSidechatRunning(false)
+        setSidechatTurnId(undefined)
+        setSidechatError(event.message)
+      }
+      return
+    }
+    const targetsSelectedSession = sessionId === undefined || sessionId === selectedRef.current
+    if (!targetsSelectedSession && event.type !== 'turn-completed') return
+    if (event.type === 'turn-started') {
+      antigravityRunningRef.current = true
+      antigravityTurnIdRef.current = event.turnId
+      setAntigravityRunning(true)
+      setAntigravityTurnId(event.turnId)
+      return
+    }
+    if (event.type === 'assistant-delta' || event.type === 'reasoning-delta') {
+      queueAntigravityDelta(event)
+      return
+    }
+    if (event.type === 'tool-item') {
+      setAntigravityMessages(current => applyCodexToolEvent(current, event, Date.now(), { idPrefix: 'antigravity', agent: 'Antigravity' }))
+      return
+    }
+    if (event.type === 'turn-completed') {
+      const ownerSessionId = event.sessionId ?? selectedRef.current
+      if (targetsSelectedSession) {
+        antigravityRunningRef.current = false
+        antigravityTurnIdRef.current = undefined
+        flushAntigravityDeltas()
+        setAntigravityTurnId(undefined)
+        if (event.status === 'failed') setActionError(`Antigravity 运行失败：${event.error ?? 'Unknown error'}`)
+      }
+      void (async () => {
+        if (targetsSelectedSession) {
+          try {
+            const snapshot = await antigravityApi.readThread(event.threadId)
+            if (event.sessionId === undefined || event.sessionId === selectedRef.current) setAntigravityMessages(snapshot.messages)
+          } catch (reason) {
+            setActionError(`Antigravity 会话刷新失败：${errorText(reason)}`)
+          }
+        }
+        const drained = event.status === 'completed' && ownerSessionId !== undefined
+          ? await drainAntigravityQueue(ownerSessionId, event.threadId)
+          : false
+        if (targetsSelectedSession && !drained) {
+          setAntigravityRunning(false)
+          setAntigravityEffectivePermission(undefined)
+        }
+      })()
+      return
+    }
+    if (event.type === 'error') {
+      flushAntigravityDeltas()
+      antigravityRunningRef.current = false
+      antigravityTurnIdRef.current = undefined
+      setAntigravityRunning(false)
+      setAntigravityEffectivePermission(undefined)
+      setAntigravityTurnId(undefined)
+      setActionError(`Antigravity CLI：${event.message}`)
+    }
+  }), [drainAntigravityQueue, flushAntigravityDeltas, queueAntigravityDelta])
 
   useEffect(() => {
     const ownerSessionId = subagentView?.childSessionId ?? selectedId
@@ -1534,9 +1911,13 @@ export function App() {
         return mode === undefined ? rest : { ...rest, [result.sessionId]: mode }
       })
       const pendingCodex = readCodexSession(pendingSession.key)
+      const pendingAntigravity = readAntigravitySession(pendingSession.key)
       writeCodexSession(result.sessionId, pendingCodex)
+      writeAntigravitySession(result.sessionId, pendingAntigravity)
       localStorage.removeItem(codexSessionKey(pendingSession.key))
+      localStorage.removeItem(antigravitySessionKey(pendingSession.key))
       setCodexSession(pendingCodex)
+      setAntigravitySession(pendingAntigravity)
     }
     setPendingSession(undefined)
     setSelectedId(result.sessionId)
@@ -1573,8 +1954,8 @@ export function App() {
   }, [])
 
   const handleAddFiles = useCallback(async (files: File[]): Promise<void> => {
-    if (codexActive) {
-      setActionError('Codex CLI 当前只接受文本输入；图片请切回 DeepSeek Host。')
+    if (codexActive || antigravityActive) {
+      setActionError(`${antigravityActive ? 'Antigravity' : 'Codex'} CLI 当前只接受文本输入；图片请切回 DeepSeek Host。`)
       return
     }
     const limits = projectionValues?.imageLimits
@@ -1618,7 +1999,7 @@ export function App() {
       setAttachments(current => [...current, ...accepted])
       setActionError(undefined)
     }
-  }, [attachments, codexActive, projectionValues?.imageLimits])
+  }, [antigravityActive, attachments, codexActive, projectionValues?.imageLimits])
 
   const handleRemoveAttachment = useCallback((id: string): void => {
     setAttachments(current => {
@@ -1719,7 +2100,9 @@ export function App() {
       model,
       ...(effort === undefined ? {} : { effort }),
       permission: previousPermission
-        ?? (provider === CODEX_PROVIDER ? DEFAULT_CODEX_PERMISSION : presentedPermission ?? DEFAULT_HOST_PERMISSION),
+        ?? (provider === ANTIGRAVITY_PROVIDER
+          ? DEFAULT_ANTIGRAVITY_PERMISSION
+          : provider === CODEX_PROVIDER ? DEFAULT_CODEX_PERMISSION : presentedPermission ?? DEFAULT_HOST_PERMISSION),
       network: sidechatSelection?.network ?? networkMode,
     }
     writeSidechatSelection(sidechatOwner, next)
@@ -1769,6 +2152,30 @@ export function App() {
       const cwd = activeWorkspace?.path ?? selected?.cwd ?? host?.cwd
       if (cwd === undefined) throw new Error('This session has no working directory')
       const handoff = collectProviderHandoff(activeMessages)
+      if (sidechatAntigravityActive) {
+        if (sidechatSelection.provider !== ANTIGRAVITY_PROVIDER || sidechatSelection.effort === undefined) throw new Error('Antigravity model metadata is unavailable')
+        const state = readAntigravitySession(sidechatOwner)
+        const permission = sidechatSelection.permission as AntigravityPermissionMode
+        const result = await antigravityApi.prompt({
+          sessionId: sidechatOwner,
+          ...(state.conversationId === undefined ? {} : { conversationId: state.conversationId }),
+          cwd,
+          model: sidechatSelection.model,
+          effort: sidechatSelection.effort,
+          permission,
+          network: networkForTurn,
+          prompt: text,
+          ...(state.conversationId === undefined ? { context: handoff.messages } : {}),
+        })
+        const next: AntigravitySessionState = {
+          ...state, active: true, conversationId: result.conversationId, model: sidechatSelection.model,
+          effort: sidechatSelection.effort, permission,
+        }
+        writeAntigravitySession(sidechatOwner, next)
+        materializeActiveSidechat(text)
+        setSidechatTurnId(result.turnId)
+        return
+      }
       if (sidechatCodexActive) {
         if (sidechatSelection.provider !== CODEX_PROVIDER || sidechatSelection.effort === undefined) throw new Error('Codex model metadata is unavailable')
         const state = readCodexSession(sidechatOwner)
@@ -1817,7 +2224,7 @@ export function App() {
       const content: PromptContentPart[] = [
         { type: 'text', text: deepSeekNetworkPolicy(networkForTurn) },
         ...(created && handoff.messages.length > 0
-          ? [{ type: 'text' as const, text: providerHandoffText(codexActive ? 'Codex' : 'DeepSeek', handoff) }]
+          ? [{ type: 'text' as const, text: providerHandoffText('DeepSeek Harness', handoff) }]
           : []),
         { type: 'text', text },
       ]
@@ -1852,6 +2259,11 @@ export function App() {
         if (state.threadId !== undefined && sidechatTurnId !== undefined) {
           await codexApi.interrupt(state.threadId, sidechatTurnId)
         }
+      } else if (sidechatAntigravityActive) {
+        const state = readAntigravitySession(sidechatOwner)
+        if (state.conversationId !== undefined && sidechatTurnId !== undefined) {
+          await antigravityApi.interrupt(state.conversationId, sidechatTurnId)
+        }
       } else if (sidechatHostSessionId !== undefined) {
         await harnessApi.cancel(sidechatHostSessionId)
         const page = await harnessApi.history(sidechatHostSessionId)
@@ -1874,7 +2286,12 @@ export function App() {
     const nextActiveId = nextThreads[Math.min(closingIndex, Math.max(0, nextThreads.length - 1))]?.id
 
     if (threadId === activeSidechatId && sidechatRunning) {
-      if (sidechatCodexActive) {
+      if (sidechatAntigravityActive) {
+        const state = readAntigravitySession(closingOwner)
+        if (state.conversationId !== undefined && sidechatTurnId !== undefined) {
+          void antigravityApi.interrupt(state.conversationId, sidechatTurnId).catch(() => undefined)
+        }
+      } else if (sidechatCodexActive) {
         const state = readCodexSession(closingOwner)
         if (state.threadId !== undefined && sidechatTurnId !== undefined) {
           void codexApi.interrupt(state.threadId, sidechatTurnId).catch(() => undefined)
@@ -1889,6 +2306,8 @@ export function App() {
     sidechatGeneration.current += 1
     localStorage.removeItem(`${SIDECHAT_SELECTION_STORAGE_PREFIX}${closingOwner}`)
     localStorage.removeItem(`dsh-workbench-sidechat-draft:${closingOwner}`)
+    localStorage.removeItem(codexSessionKey(closingOwner))
+    localStorage.removeItem(antigravitySessionKey(closingOwner))
     setSidechatThreadsByParent(current => ({ ...current, [selectedId]: nextThreads }))
     setActiveSidechatByParent(current => {
       if (current[selectedId] !== threadId && activeSidechatId !== threadId) return current
@@ -1938,7 +2357,10 @@ export function App() {
       return
     }
     const codexWasRunning = codexRunningRef.current
-    const runningNow = codexActive
+    const antigravityWasRunning = antigravityRunningRef.current
+    const runningNow = antigravityActive
+      ? antigravityRunningRef.current
+      : codexActive
       ? codexRunningRef.current
       : subagentView === undefined ? selected?.running === true : activeSubagent?.activity === 'running'
     const deliveryMode = runningNow ? requestedMode : 'queue'
@@ -1952,7 +2374,7 @@ export function App() {
     const pendingPermission = wasPending
       ? permissionOverrideForNewSession(pendingHostPermission, DEFAULT_HOST_PERMISSION)
       : undefined
-    const transition = codexActive || runningNow
+    const transition = codexActive || antigravityActive || runningNow
       ? undefined
       : createPendingTurn(sourceOwner, prompt, submittedAttachments, tailBeforeSend ?? -1)
     setConversationScrollRequest(current => current + 1)
@@ -1980,6 +2402,69 @@ export function App() {
             return { ...rest, [targetOwner]: { ...candidate, owner: targetOwner } }
           })
         }
+      }
+      if (antigravityActive) {
+        if (submittedAttachments.length > 0) throw new Error('Antigravity CLI 当前只接受文本输入')
+        const current = presentedModels?.current
+        const cwd = activeWorkspace?.path ?? pendingSession?.cwd ?? selected?.cwd ?? host?.cwd
+        if (current === undefined || cwd === undefined) throw new Error('Antigravity model or work folder is unavailable')
+        if (antigravityRunningRef.current) {
+          const item: AntigravityQueuedPrompt = {
+            id: `antigravity-queue-${crypto.randomUUID()}`,
+            prompt, cwd, model: current.model, effort: current.reasoningEffort ?? 'high',
+            permission: antigravityPermission, network: networkForTurn, createdAt: Date.now(),
+          }
+          updateAntigravityQueues(queues => ({
+            ...queues,
+            [sessionId]: [...(queues[sessionId] ?? []), item].slice(-40),
+          }))
+          setDrafts(currentDrafts => {
+            const { [sourceDraftKey]: _submitted, ...rest } = currentDrafts
+            return rest
+          })
+          return
+        }
+        const optimisticId = `antigravity-user-${Date.now()}`
+        setAntigravityMessages(currentMessages => [...currentMessages, {
+          id: optimisticId, seq: (currentMessages.at(-1)?.seq ?? 0) + 1, time: Date.now(), role: 'user', blocks: [{ kind: 'text', text: prompt }],
+        }])
+        antigravityRunningRef.current = true
+        setAntigravityEffectivePermission(antigravityPermission)
+        setAntigravityRunning(true)
+        const externalMessages = mergeAllProviderTranscripts(retainedDeepSeekMessages, retainedCodexMessages, [])
+        const handoff = collectProviderHandoff(externalMessages)
+        const result = await antigravityApi.prompt({
+          sessionId,
+          ...(antigravitySession.conversationId === undefined ? {} : { conversationId: antigravitySession.conversationId }),
+          cwd,
+          model: current.model,
+          effort: current.reasoningEffort ?? 'high',
+          permission: antigravityPermission,
+          network: networkForTurn,
+          prompt,
+          context: handoff.messages,
+        })
+        const next: AntigravitySessionState = {
+          ...antigravitySession, active: true, conversationId: result.conversationId, model: current.model,
+          effort: current.reasoningEffort ?? 'high', permission: antigravityPermission,
+        }
+        setAntigravitySession(next)
+        writeAntigravitySession(sessionId, next)
+        if (wasPending || selected?.blank === true) {
+          void harnessApi.renameSession(sessionId, queuedPreview(prompt).slice(0, 48) || 'Antigravity session').then(() => refreshChrome()).catch(() => undefined)
+        }
+        const nextCodex = { ...codexSession, active: false }
+        setCodexSession(nextCodex)
+        writeCodexSession(sessionId, nextCodex)
+        antigravityTurnIdRef.current = result.turnId
+        setAntigravityTurnId(result.turnId)
+        setDrafts(currentDrafts => {
+          const nextDrafts = { ...currentDrafts }
+          delete nextDrafts[sourceDraftKey]
+          delete nextDrafts[sessionId]
+          return nextDrafts
+        })
+        return
       }
       if (codexActive) {
         if (submittedAttachments.length > 0) throw new Error('Codex CLI 当前只接受文本输入')
@@ -2039,7 +2524,7 @@ export function App() {
         codexRunningRef.current = true
         setCodexEffectivePermission(codexPermission)
         setCodexRunning(true)
-        const handoff = collectProviderHandoff(retainedDeepSeekMessages, codexSession.codexImportedHostSeq ?? 0)
+        const handoff = collectProviderHandoff(mergeAllProviderTranscripts(retainedDeepSeekMessages, [], retainedAntigravityMessages), codexSession.codexImportedHostSeq ?? 0)
         const result = await codexApi.prompt({
           sessionId,
           ...(codexSession.threadId === undefined ? {} : { threadId: codexSession.threadId }),
@@ -2062,6 +2547,12 @@ export function App() {
         }
         setCodexSession(next)
         writeCodexSession(sessionId, next)
+        if (wasPending || selected?.blank === true) {
+          void harnessApi.renameSession(sessionId, queuedPreview(prompt).slice(0, 48) || 'Codex session').then(() => refreshChrome()).catch(() => undefined)
+        }
+        const nextAntigravity = { ...antigravitySession, active: false }
+        setAntigravitySession(nextAntigravity)
+        writeAntigravitySession(sessionId, nextAntigravity)
         codexTurnIdRef.current = result.turnId
         setCodexTurnId(result.turnId)
         setDrafts(current => {
@@ -2072,7 +2563,7 @@ export function App() {
         })
         return
       }
-      if (wasPending && pendingModel !== undefined && pendingModel.provider !== CODEX_PROVIDER) {
+      if (wasPending && pendingModel !== undefined && pendingModel.provider !== CODEX_PROVIDER && pendingModel.provider !== ANTIGRAVITY_PROVIDER) {
         await harnessApi.selectModel(sessionId, pendingModel.provider, pendingModel.model, pendingModel.reasoningEffort)
       }
       if (pendingPermission !== undefined) {
@@ -2083,21 +2574,26 @@ export function App() {
         if (attachments.length > 0) throw new Error('子代理会话暂不支持图片')
         await harnessApi.subagentPrompt({ parentSessionId: sessionId, childSessionId: subagentView.childSessionId, text: prompt })
       } else {
-        const handoff = collectProviderHandoff(retainedCodexMessages, codexSession.deepSeekImportedCodexSeq ?? 0)
+        const handoff = collectProviderHandoff(mergeAllProviderTranscripts([], retainedCodexMessages, retainedAntigravityMessages), codexSession.deepSeekImportedCodexSeq ?? 0)
         const content: PromptContentPart[] = [
           { type: 'text', text: deepSeekNetworkPolicy(networkForTurn) },
           ...(handoff.messages.length === 0
             ? []
-            : [{ type: 'text' as const, text: providerHandoffText('Codex', handoff) }]),
+            : [{ type: 'text' as const, text: providerHandoffText('DeepSeek Harness', handoff) }]),
           ...(prompt === '' ? [] : [{ type: 'text' as const, text: prompt }]),
           ...attachments.map(item => ({ type: 'image' as const, mediaType: item.mediaType, data: item.data, name: item.name })),
         ]
         await harnessApi.prompt(sessionId, content, deliveryMode)
-        if (handoff.throughSeq !== undefined) {
-          const next = { ...codexSession, active: false, deepSeekImportedCodexSeq: handoff.throughSeq }
-          setCodexSession(next)
-          writeCodexSession(sessionId, next)
+        const next = {
+          ...codexSession,
+          active: false,
+          ...(handoff.throughSeq === undefined ? {} : { deepSeekImportedCodexSeq: handoff.throughSeq }),
         }
+        setCodexSession(next)
+        writeCodexSession(sessionId, next)
+        const nextAntigravity = { ...antigravitySession, active: false }
+        setAntigravitySession(nextAntigravity)
+        writeAntigravitySession(sessionId, nextAntigravity)
       }
       releaseAttachments(submittedAttachments)
       const submittedIds = new Set(submittedAttachments.map(item => item.id))
@@ -2122,6 +2618,13 @@ export function App() {
         setCodexRunning(false)
         setCodexEffectivePermission(undefined)
         setCodexTurnId(undefined)
+      }
+      if (antigravityActive && !antigravityWasRunning) {
+        antigravityRunningRef.current = false
+        antigravityTurnIdRef.current = undefined
+        setAntigravityRunning(false)
+        setAntigravityEffectivePermission(undefined)
+        setAntigravityTurnId(undefined)
       }
       if (transition !== undefined) {
         setPendingTurns(current => Object.fromEntries(
@@ -2150,6 +2653,10 @@ export function App() {
     setBusy(true)
     setActionError(undefined)
     try {
+      if (antigravityRunningRef.current && antigravitySession.conversationId !== undefined && antigravityTurnIdRef.current !== undefined) {
+        await antigravityApi.interrupt(antigravitySession.conversationId, antigravityTurnIdRef.current)
+        return
+      }
       if (codexRunningRef.current && codexSession.threadId !== undefined && codexTurnIdRef.current !== undefined) {
         await codexApi.interrupt(codexSession.threadId, codexTurnIdRef.current)
         return
@@ -2171,7 +2678,9 @@ export function App() {
     const stateKey = selectedId ?? pendingSession?.key
     if (stateKey === undefined || presentedModels === undefined || busy || subagentView !== undefined) return
     const modelEntry = presentedModels.groups.find(group => group.id === provider)?.models.find(entry => entry.id === model)
-    const currentEffort = provider === CODEX_PROVIDER
+    const currentEffort = provider === ANTIGRAVITY_PROVIDER
+      ? antigravitySession.effort
+      : provider === CODEX_PROVIDER
       ? codexSession.effort
       : models?.current.reasoningEffort
     const efforts = modelEntry?.reasoning?.efforts ?? []
@@ -2180,11 +2689,25 @@ export function App() {
       : modelEntry?.reasoning?.defaultEffort
     setBusy(true)
     try {
+      if (provider === ANTIGRAVITY_PROVIDER) {
+        if (modelEntry === undefined || effort === undefined) throw new Error('Antigravity model metadata is unavailable')
+        const next = { ...antigravitySession, active: true, model, effort, permission: antigravityPermission }
+        setAntigravitySession(next)
+        writeAntigravitySession(stateKey, next)
+        const nextCodex = { ...codexSession, active: false }
+        setCodexSession(nextCodex)
+        writeCodexSession(stateKey, nextCodex)
+        setActionError(undefined)
+        return
+      }
       if (provider === CODEX_PROVIDER) {
         if (modelEntry === undefined || effort === undefined) throw new Error('Codex model metadata is unavailable')
         const next = { ...codexSession, active: true, model, effort, permission: codexPermission }
         setCodexSession(next)
         writeCodexSession(stateKey, next)
+        const nextAntigravity = { ...antigravitySession, active: false }
+        setAntigravitySession(nextAntigravity)
+        writeAntigravitySession(stateKey, nextAntigravity)
         setActionError(undefined)
         return
       }
@@ -2196,6 +2719,9 @@ export function App() {
         const next = { ...codexSession, active: false }
         setCodexSession(next)
         writeCodexSession(stateKey, next)
+        const nextAntigravity = { ...antigravitySession, active: false }
+        setAntigravitySession(nextAntigravity)
+        writeAntigravitySession(stateKey, nextAntigravity)
         setActionError(undefined)
         return
       }
@@ -2204,6 +2730,9 @@ export function App() {
       const next = { ...codexSession, active: false }
       setCodexSession(next)
       writeCodexSession(selectedId, next)
+      const nextAntigravity = { ...antigravitySession, active: false }
+      setAntigravitySession(nextAntigravity)
+      writeAntigravitySession(selectedId, nextAntigravity)
       await refreshChrome()
     } catch (reason) {
       setActionError(`模型切换失败：${errorText(reason)}`)
@@ -2217,6 +2746,17 @@ export function App() {
     if (stateKey === undefined || presentedModels === undefined || busy || subagentView !== undefined) return
     setBusy(true)
     try {
+      if (antigravityActive) {
+        const model = antigravityCatalog.models.find(candidate => candidate.id === presentedModels.current.model)
+        if (model === undefined || !model.efforts.some(candidate => candidate.id === effort)) {
+          throw new Error('This Antigravity model does not support the selected reasoning effort')
+        }
+        const next = { ...antigravitySession, active: true, model: model.id, effort }
+        setAntigravitySession(next)
+        writeAntigravitySession(stateKey, next)
+        setActionError(undefined)
+        return
+      }
       if (codexActive) {
         const model = codexCatalog.models.find(candidate => candidate.id === presentedModels.current.model)
         if (model === undefined || !model.efforts.some(candidate => candidate.id === effort)) {
@@ -2253,6 +2793,17 @@ export function App() {
   const handlePermission = async (preset: string): Promise<void> => {
     const stateKey = selectedId ?? pendingSession?.key
     if (stateKey === undefined || busy || subagentView !== undefined) return
+    if (antigravityActive) {
+      if (preset !== 'read-only' && preset !== 'workspace-write' && preset !== 'full-access') return
+      if (preset === antigravityPermission) return
+      if (preset === 'full-access' && !window.confirm('Full access disables Antigravity filesystem sandboxing. Continue?')) return
+      const permission = preset as AntigravityPermissionMode
+      const next = { ...antigravitySession, active: true, permission }
+      setAntigravitySession(next)
+      writeAntigravitySession(stateKey, next)
+      setActionError(undefined)
+      return
+    }
     if (codexActive) {
       if (preset !== 'read-only' && preset !== 'ask-for-approval' && preset !== 'approve-for-me' && preset !== 'full-access') return
       if (preset === codexPermission) return
@@ -2292,7 +2843,7 @@ export function App() {
   }
 
   const handleExitPlan = async (): Promise<void> => {
-    if (selectedId === undefined || busy || codexActive || subagentView !== undefined) return
+    if (selectedId === undefined || busy || codexActive || antigravityActive || subagentView !== undefined) return
     setBusy(true)
     try {
       await harnessApi.prompt(selectedId, [{ type: 'text', text: '/plan off' }])
@@ -2418,6 +2969,7 @@ export function App() {
       return next
     })
     localStorage.removeItem(codexSessionKey(session.sessionId))
+    localStorage.removeItem(antigravitySessionKey(session.sessionId))
     delete providerTranscriptCache.current[session.sessionId]
     if (session.sessionId === selectedId) {
       setSubagentView(undefined)
@@ -2637,6 +3189,31 @@ export function App() {
     if (selectedId === undefined || subagentView !== undefined || busy) return
     setBusy(true)
     try {
+      const antigravityItem = antigravityQueuesRef.current[selectedId]?.find(item => item.id === itemId)
+      if (antigravityItem !== undefined) {
+        if (action.kind === 'edit') {
+          const prompt = action.text.trim()
+          if (prompt === '') throw new Error('Queued message cannot be empty')
+          updateAntigravityQueues(current => ({
+            ...current,
+            [selectedId]: (current[selectedId] ?? []).map(item => item.id === itemId ? { ...item, prompt } : item),
+          }))
+          return
+        }
+        if (action.kind === 'remove') {
+          updateAntigravityQueues(current => {
+            const remaining = (current[selectedId] ?? []).filter(item => item.id !== itemId)
+            const { [selectedId]: _removed, ...rest } = current
+            return remaining.length === 0 ? rest : { ...rest, [selectedId]: remaining }
+          })
+          return
+        }
+        if (antigravityRunningRef.current) throw new Error('Antigravity print mode cannot steer a running turn; the message remains queued')
+        const state = readAntigravitySession(selectedId)
+        if (state.conversationId === undefined) throw new Error('This Antigravity queue has no conversation to resume')
+        await drainAntigravityQueue(selectedId, state.conversationId, itemId)
+        return
+      }
       const codexItem = codexQueuesRef.current[selectedId]?.find(item => item.id === itemId)
       if (codexItem !== undefined) {
         if (action.kind === 'edit') {
@@ -2850,7 +3427,7 @@ export function App() {
   const activeMessages = smoothMessages
   const activeRunning = subagentView !== undefined
     ? activeSubagent?.activity === 'running'
-    : codexRunning || selected?.running === true
+    : antigravityRunning || codexRunning || selected?.running === true
   const activeTitle = subagentView?.label ?? titleOf(selected)
   const activeModels = subagentView === undefined ? presentedModels : undefined
   const activeJobs = subagentView === undefined
@@ -2877,6 +3454,46 @@ export function App() {
     const sessionId = selectedId
     const networkForTurn = effectiveNetworkMode(networkMode)
     setConversationScrollRequest(current => current + 1)
+    if (antigravityActive) {
+      const current = presentedModels?.current
+      const cwd = activeWorkspace?.path ?? selected?.cwd ?? host?.cwd
+      if (current === undefined || cwd === undefined) throw new Error(tr('Antigravity model or work folder is unavailable.', 'Antigravity 模型或工作目录不可用。'))
+      if (antigravityRunningRef.current) {
+        const item: AntigravityQueuedPrompt = {
+          id: `agent-room-report-${crypto.randomUUID()}`, prompt: report, cwd, model: current.model,
+          effort: current.reasoningEffort ?? 'high', permission: antigravityPermission, network: networkForTurn, createdAt: Date.now(),
+        }
+        updateAntigravityQueues(queues => ({ ...queues, [sessionId]: [...(queues[sessionId] ?? []), item].slice(-40) }))
+        return
+      }
+      const optimisticId = `agent-room-antigravity-report-${Date.now()}`
+      setAntigravityMessages(currentMessages => [...currentMessages, {
+        id: optimisticId, seq: (currentMessages.at(-1)?.seq ?? 0) + 1, time: Date.now(), role: 'user', blocks: [{ kind: 'text', text: report }],
+      }])
+      antigravityRunningRef.current = true
+      setAntigravityRunning(true)
+      setAntigravityEffectivePermission(antigravityPermission)
+      try {
+        const result = await antigravityApi.prompt({
+          sessionId,
+          ...(antigravitySession.conversationId === undefined ? {} : { conversationId: antigravitySession.conversationId }),
+          cwd, model: current.model, effort: current.reasoningEffort ?? 'high', permission: antigravityPermission,
+          network: networkForTurn, prompt: report,
+        })
+        const next = { ...antigravitySession, active: true, conversationId: result.conversationId, model: current.model, effort: current.reasoningEffort ?? 'high', permission: antigravityPermission }
+        setAntigravitySession(next)
+        writeAntigravitySession(sessionId, next)
+        antigravityTurnIdRef.current = result.turnId
+        setAntigravityTurnId(result.turnId)
+      } catch (reason) {
+        antigravityRunningRef.current = false
+        setAntigravityRunning(false)
+        setAntigravityEffectivePermission(undefined)
+        setAntigravityMessages(currentMessages => currentMessages.filter(message => message.id !== optimisticId))
+        throw reason
+      }
+      return
+    }
     if (!codexActive) {
       await harnessApi.prompt(sessionId, [
         { type: 'text', text: deepSeekNetworkPolicy(networkForTurn) },
@@ -3016,12 +3633,12 @@ export function App() {
             </button>
             <span className="connection-pill" data-state={offline ? 'offline' : connection}>
               <i />
-              {codexActive ? 'Codex CLI' : offline ? 'Host offline' : connection === 'connected' ? 'Local' : connection}
+              {antigravityActive ? 'Antigravity CLI' : codexActive ? 'Codex CLI' : offline ? 'Host offline' : connection === 'connected' ? 'Local' : connection}
             </span>
             <button type="button" className="icon-button" onClick={openSettings} aria-label="Open Settings" title={`Settings (${shortcutLabel(',')})`}>
               <Icon name="settings" size={15} />
             </button>
-            <button type="button" className="icon-button" onClick={() => { void refreshChrome(); void refreshCodexCatalog(true) }} aria-label="Refresh">
+            <button type="button" className="icon-button" onClick={() => { void refreshChrome(); void refreshCodexCatalog(true); void refreshAntigravityCatalog(true) }} aria-label="Refresh">
               <Icon name="refresh" size={15} />
             </button>
             <button type="button" className="icon-button" onClick={openAgentRoomFromMain} disabled={selectedId === undefined || subagentView !== undefined} aria-label={tr('Create Agent Room audit', '创建 Agent Room 审计')} title={tr('Audit this thread in Agent Room', '在 Agent Room 中审计当前线程')}>
@@ -3064,7 +3681,9 @@ export function App() {
           onChange={setDraft}
           onSend={mode => { void handleSend(mode) }}
           onStop={() => { void handleStop() }}
-          disabled={codexActive ? !codexCatalog.available || (selectedId === undefined && pendingSession === undefined) : subagentView?.mode === 'one-shot' || offline}
+          disabled={antigravityActive
+            ? !antigravityCatalog.available || (selectedId === undefined && pendingSession === undefined)
+            : codexActive ? !codexCatalog.available || (selectedId === undefined && pendingSession === undefined) : subagentView?.mode === 'one-shot' || offline}
           running={activeRunning}
           busy={busy}
           error={actionError}
@@ -3075,16 +3694,17 @@ export function App() {
           onEffort={effort => { void handleEffort(effort) }}
           onPermission={preset => { void handlePermission(preset) }}
           networkMode={networkMode}
-          networkAvailable={codexActive || (pendingSession?.agentPreset ?? selected?.agentPreset) !== 'minimal'}
-          networkOnline={codexActive ? codexCatalog.available : !offline}
+          networkAvailable={antigravityActive || codexActive || (pendingSession?.agentPreset ?? selected?.agentPreset) !== 'minimal'}
+          networkOnline={antigravityActive ? antigravityCatalog.available : codexActive ? codexCatalog.available : !offline}
           onNetworkMode={handleNetworkMode}
-          plan={codexActive ? undefined : projectionValues?.plan}
+          plan={codexActive || antigravityActive ? undefined : projectionValues?.plan}
           onExitPlan={() => { void handleExitPlan() }}
           attachments={attachments}
           onAddFiles={files => { void handleAddFiles(files) }}
           onRemoveAttachment={handleRemoveAttachment}
           queue={activeQueue}
           onQueueAction={(itemId, action) => { void handleQueueAction(itemId, action) }}
+          supportsSteer={!antigravityActive}
         />
 
         {terminalOpen && (
@@ -3109,14 +3729,16 @@ export function App() {
           questions={pendingQuestions}
           parentMessages={activeMessages}
           hostPermission={permissions?.currentValue ?? pendingHostPermission}
-          effectivePermission={codexActive ? codexEffectivePermission ?? `${codexPermission} (${tr('next turn', '下一轮')})` : permissions?.currentValue ?? pendingHostPermission}
+          effectivePermission={antigravityActive
+            ? antigravityEffectivePermission ?? `${antigravityPermission} (${tr('next turn', '下一轮')})`
+            : codexActive ? codexEffectivePermission ?? `${codexPermission} (${tr('next turn', '下一轮')})` : permissions?.currentValue ?? pendingHostPermission}
           agentRoomRequest={agentRoomRequest}
           sidechat={{
             owner: sidechatOwner,
             parentTitle: selected === undefined ? undefined : titleOf(selected),
             threads: sidechatThreads,
             activeThreadId: activeSidechatId,
-            provider: sidechatCodexActive ? 'Codex' : sidechatModelEntry?.name ?? sidechatSelection?.model ?? 'DeepSeek',
+            provider: sidechatAntigravityActive ? 'Antigravity' : sidechatCodexActive ? 'Codex' : sidechatModelEntry?.name ?? sidechatSelection?.model ?? 'DeepSeek',
             models: sidechatModels,
             permissionOptions: sidechatPermissionOptions,
             permission: sidechatSelection?.permission,
@@ -3153,6 +3775,7 @@ export function App() {
           onRefresh={() => {
             void refreshChrome()
             void refreshCodexCatalog(true)
+            void refreshAntigravityCatalog(true)
             if (selectedId !== undefined) void refreshSession(selectedId, { includeModels: true })
           }}
         />
@@ -3161,6 +3784,7 @@ export function App() {
       <OnboardingWizard
         open={onboardingOpen}
         codex={codexCatalog}
+        antigravity={antigravityCatalog}
         onClose={() => {
           localStorage.setItem(ONBOARDING_STORAGE_KEY, 'true')
           setOnboardingOpen(false)
@@ -3172,8 +3796,10 @@ export function App() {
         onHostReady={async () => {
           await refreshChrome()
           await refreshCodexCatalog(true)
+          await refreshAntigravityCatalog(true)
         }}
         onRefreshCodex={async () => { await refreshCodexCatalog(true) }}
+        onRefreshAntigravity={async () => { await refreshAntigravityCatalog(true) }}
       />
 
       <GoalDialog
@@ -3222,7 +3848,7 @@ export function App() {
         offline={offline}
         fontStatus={fontStatus}
         archivedSessions={visibleSessions.filter(session => archivedSessionIds.includes(session.sessionId) && !deletedSessionIds.has(session.sessionId))}
-        effectivePermission={codexActive ? codexEffectivePermission : permissions?.currentValue}
+        effectivePermission={antigravityActive ? antigravityEffectivePermission : codexActive ? codexEffectivePermission : permissions?.currentValue}
         onClose={() => setSettingsOpen(false)}
         onThemeMode={setThemeMode}
         onDensity={setDensity}
@@ -3240,6 +3866,7 @@ export function App() {
         onRefreshHost={() => {
           void refreshChrome()
           void refreshCodexCatalog(true)
+          void refreshAntigravityCatalog(true)
           if (selectedId !== undefined) void refreshSession(selectedId, { includeModels: true })
         }}
         onArchivedSession={sessionId => { selectSession(sessionId); setSettingsOpen(false) }}

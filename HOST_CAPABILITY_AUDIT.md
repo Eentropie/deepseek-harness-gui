@@ -17,7 +17,7 @@ This means the current build is a capable standalone client, not a claim of full
 
 ## Archived chats and Delete
 
-Archived chats now appear in a collapsed **Archived** group at the bottom of the sidebar. Expand it to reopen an archived transcript. The native chat menu hides **Archive chat** after a chat is archived.
+Archived chats are managed under **Settings → Archived chats**, keeping the main sidebar focused on active sessions. The native chat menu hides **Archive chat** after a chat is archived.
 
 **Delete chat…** is available from the same native menu and is disabled while a session is running. Its current semantics are deliberately conservative:
 

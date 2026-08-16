@@ -1,4 +1,9 @@
 import type {
+  AntigravityCatalog,
+  AntigravityEvent,
+  AntigravityPermissionMode,
+  AntigravityPromptResult,
+  AntigravityThreadSnapshot,
   CodexCatalog,
   CodexEvent,
   CodexApprovalDecision,
@@ -60,13 +65,27 @@ interface DeepSeekDesktopBridge {
   codexSteer: (threadId: string, turnId: string, prompt: string) => Promise<CodexSteerResult>
   codexInterrupt: (threadId: string, turnId: string) => Promise<void>
   codexRespondApproval: (requestId: string | number, decision: CodexApprovalDecision) => Promise<void>
+  antigravityCatalog: (refresh?: boolean) => Promise<AntigravityCatalog>
+  antigravityPrompt: (payload: {
+    sessionId: string
+    conversationId?: string
+    cwd: string
+    model: string
+    effort: string
+    permission: AntigravityPermissionMode
+    network: import('./lib/types.ts').EffectiveNetworkMode
+    prompt: string
+    context?: import('./lib/types.ts').ProviderHandoffMessage[]
+  }) => Promise<AntigravityPromptResult>
+  antigravityReadThread: (conversationId: string) => Promise<AntigravityThreadSnapshot>
+  antigravityInterrupt: (conversationId: string, turnId: string) => Promise<void>
   terminalRun: (input: { id: string; cwd: string; command: string }) => Promise<{ accepted: true }>
   terminalStop: (id: string) => Promise<void>
   terminalChangeDirectory: (cwd: string, target: string) => Promise<string>
   setupInspect: () => Promise<SetupSnapshot>
   setupStartHost: () => Promise<SetupSnapshot>
   setupStopHost: () => Promise<void>
-  setupOpenExternal: (target: 'deepseek-key' | 'node' | 'codex-install') => Promise<void>
+  setupOpenExternal: (target: 'deepseek-key' | 'node' | 'codex-install' | 'antigravity-install') => Promise<void>
   setupOpenCodexLogin: () => Promise<void>
   reviewList: (input: { sessionId: string; cwd: string }) => Promise<ReviewSnapshot>
   reviewDirectory: (input: { sessionId: string; cwd: string; path: string }) => Promise<ReviewDirectorySnapshot>
@@ -80,6 +99,7 @@ interface DeepSeekDesktopBridge {
   onOpenPlugins: (listener: () => void) => () => void
   onOpenSettings: (listener: () => void) => () => void
   onCodexEvent: (listener: (event: CodexEvent) => void) => () => void
+  onAntigravityEvent: (listener: (event: AntigravityEvent) => void) => () => void
   onTerminalEvent: (listener: (event: TerminalEvent) => void) => () => void
   onSetupEvent: (listener: (event: SetupEvent) => void) => () => void
 }

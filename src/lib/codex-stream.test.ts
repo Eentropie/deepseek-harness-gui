@@ -41,6 +41,13 @@ describe('applyCodexDeltas', () => {
     const messages = applyCodexDeltas([settled], [delta('reply')])
     expect(messages[0]).toBe(settled)
   })
+
+  it('can render the same stable stream protocol with Antigravity identity', () => {
+    const messages = applyCodexDeltas([], [delta('reply')], 456, { idPrefix: 'antigravity', agent: 'Antigravity' })
+    expect(messages[0]).toEqual(expect.objectContaining({
+      id: 'antigravity-turn-turn', agent: 'Antigravity', time: 456,
+    }))
+  })
 })
 
 describe('applyCodexToolEvent', () => {

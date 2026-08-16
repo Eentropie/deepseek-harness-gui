@@ -401,7 +401,7 @@ export function ModelsCredentialsSettings({ active, compact = false, onSummary }
             }}>Configure</button>
           </div>
 
-          <div className="settings-note"><Icon name="brain" size={14} /><span>Codex CLI models remain account-scoped and use the existing Codex login. Host providers configured here are separate routes owned by DeepSeek Harness.</span></div>
+          <div className="settings-note"><Icon name="brain" size={14} /><span>Codex and Antigravity CLI models remain account-scoped and use their existing subscription logins. Host providers configured here are separate routes owned by DeepSeek Harness.</span></div>
         </>
       )}
     </section>

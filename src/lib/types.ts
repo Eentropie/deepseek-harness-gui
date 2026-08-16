@@ -186,7 +186,7 @@ export interface QueueItem {
   content: unknown[]
   preview: string
   text: string | null
-  source?: 'host' | 'codex'
+  source?: 'host' | 'codex' | 'antigravity'
 }
 
 export interface SessionSearchHit {
@@ -411,7 +411,8 @@ export interface ConversationMessage {
   time: number
   role: 'user' | 'assistant'
   blocks: MessageBlock[]
-  agent?: 'DeepSeek' | 'Codex'
+  agent?: 'DeepSeek' | 'Codex' | 'Antigravity'
+  modelName?: string
   streaming?: boolean
   transient?: 'agent-starting'
   streamAssistantItemId?: string
@@ -427,6 +428,73 @@ export interface CodexCatalogModel {
   efforts: ModelEffort[]
   isDefault: boolean
 }
+
+export interface AntigravityCatalogModel {
+  id: string
+  name: string
+  defaultEffort: string
+  efforts: ModelEffort[]
+  variants: Array<{ effort: string; model: string }>
+  isDefault: boolean
+}
+
+export interface AntigravityCatalog {
+  available: boolean
+  authenticatedWith: 'Google'
+  version?: string
+  models: AntigravityCatalogModel[]
+  error?: string
+}
+
+export type AntigravityPermissionMode = 'read-only' | 'workspace-write' | 'full-access'
+
+export interface AntigravityPromptResult {
+  conversationId: string
+  turnId: string
+}
+
+export interface AntigravityThreadSnapshot {
+  conversationId: string
+  messages: ConversationMessage[]
+}
+
+export type AntigravityEvent =
+  | {
+    type: 'turn-started'
+    sessionId: string
+    threadId: string
+    turnId: string
+  }
+  | {
+    type: 'assistant-delta' | 'reasoning-delta'
+    sessionId: string
+    threadId: string
+    turnId: string
+    itemId: string
+    delta: string
+  }
+  | {
+    type: 'tool-item'
+    sessionId: string
+    threadId: string
+    turnId: string
+    block: Extract<ProcessBlock, { kind: 'tool' }>
+  }
+  | {
+    type: 'turn-completed'
+    sessionId: string
+    threadId: string
+    turnId: string
+    status: 'completed' | 'interrupted' | 'failed'
+    error?: string
+  }
+  | {
+    type: 'error'
+    sessionId?: string
+    threadId?: string
+    turnId?: string
+    message: string
+  }
 
 export interface CodexCatalog {
   available: boolean

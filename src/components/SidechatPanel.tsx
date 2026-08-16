@@ -88,7 +88,7 @@ export function SidechatPanel({ owner, parentTitle, threads, activeThreadId, pro
         </select></label>
         {efforts.length > 0 && <label title="Reasoning effort"><Icon name="sparkles" size={12} /><select value={models?.current.reasoningEffort ?? currentModel?.reasoning?.defaultEffort ?? ''} onChange={event => onEffort(event.target.value)}>{efforts.map(effort => <option value={effort.id} key={effort.id}>{effort.name}</option>)}</select></label>}
         {permissionOptions.length > 0 && <label title="Permission"><Icon name="lock" size={12} /><select value={permission ?? ''} onChange={event => onPermission(event.target.value)}>{permissionOptions.map(option => <option value={option.value} key={option.value}>{option.name}</option>)}</select></label>}
-        <label title={`${models?.current.provider === 'codex-cli' ? 'Codex' : 'Host'} web access`}><Icon name="globe" size={12} /><select value={network} onChange={event => onNetwork(event.target.value as NetworkMode)}><option value="off">Web off</option><option value="auto">Web auto · {models?.current.provider === 'codex-cli' ? 'Codex' : 'Host'}</option><option value="ask">Ask before web</option></select></label>
+        <label title={`${models?.current.provider === 'antigravity-cli' ? 'Antigravity' : models?.current.provider === 'codex-cli' ? 'Codex' : 'Host'} web access`}><Icon name="globe" size={12} /><select value={network} onChange={event => onNetwork(event.target.value as NetworkMode)}><option value="off">Web off</option><option value="auto">Web auto · {models?.current.provider === 'antigravity-cli' ? 'Antigravity' : models?.current.provider === 'codex-cli' ? 'Codex' : 'Host'}</option><option value="ask">Ask before web</option></select></label>
       </div></>}
       <div className="sidechat-messages" ref={scroll}>
         {owner === undefined ? (
@@ -98,7 +98,7 @@ export function SidechatPanel({ owner, parentTitle, threads, activeThreadId, pro
         )}
         {messages.map(message => (
           <article className="sidechat-message" data-role={message.role} key={message.id}>
-            <header>{message.role === 'assistant' && <ProviderLogo provider={message.agent ?? provider} size={12} />}{message.role === 'user' ? 'You' : message.agent ?? provider}</header>
+            <header>{message.role === 'assistant' && <ProviderLogo provider={message.agent ?? provider} name={message.modelName} size={12} />}{message.role === 'user' ? 'You' : message.agent ?? provider}</header>
             {message.blocks.map((block, index) => <SidechatBlock block={block} key={`${message.id}-${index}`} />)}
           </article>
         ))}

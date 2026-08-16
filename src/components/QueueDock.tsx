@@ -67,8 +67,10 @@ export function QueueDock({ items, running, disabled = false, onAction }: QueueD
                         type="button"
                         className="queue-action"
                         aria-label={running ? 'Send queued message now' : 'Start queued message'}
-                        title={running ? 'Send now in the current turn' : item.source === 'codex' ? 'Start this queued Codex message' : 'Steering is available while the agent is running'}
-                        disabled={!running && item.source !== 'codex'}
+                        title={running
+                          ? item.source === 'antigravity' ? 'Antigravity will send this after the current response' : 'Send now in the current turn'
+                          : item.source === 'antigravity' ? 'Start this queued Antigravity message' : item.source === 'codex' ? 'Start this queued Codex message' : 'Steering is available while the agent is running'}
+                        disabled={running ? item.source === 'antigravity' : item.source !== 'codex' && item.source !== 'antigravity'}
                         onClick={() => onAction(item.id, { kind: 'steer' })}
                       ><Icon name="send" size={12} /></button>
                     </>

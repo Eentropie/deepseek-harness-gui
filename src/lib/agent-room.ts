@@ -3,6 +3,7 @@ import type { ConversationMessage, ModelGroup, NetworkMode, SessionModels } from
 export const AGENT_ROOM_STORAGE_PREFIX = 'dsh-workbench-agent-room-v1:'
 export const AGENT_ROOM_OWNER_PREFIX = 'agent-room:'
 export const AGENT_ROOM_CODEX_PROVIDER = 'codex-cli'
+export const AGENT_ROOM_ANTIGRAVITY_PROVIDER = 'antigravity-cli'
 
 export type AgentRoomRole = 'reviewer' | 'challenger' | 'researcher' | 'judge'
 export type AgentRoomPhase = 'idle' | 'independent' | 'rebuttal' | 'judgment' | 'completed' | 'stopped' | 'failed'
@@ -21,6 +22,7 @@ export interface AgentRoomAgent {
   role: AgentRoomRole
   hostSessionId?: string
   codexThreadId?: string
+  antigravityConversationId?: string
   runtimeCwd?: string
   isolated?: boolean
 }
@@ -124,6 +126,7 @@ function normalizeAgent(value: unknown): AgentRoomAgent | undefined {
     ...(typeof row['effort'] === 'string' ? { effort: row['effort'].slice(0, 64) } : {}),
     ...(typeof row['hostSessionId'] === 'string' ? { hostSessionId: row['hostSessionId'].slice(0, 256) } : {}),
     ...(typeof row['codexThreadId'] === 'string' ? { codexThreadId: row['codexThreadId'].slice(0, 256) } : {}),
+    ...(typeof row['antigravityConversationId'] === 'string' ? { antigravityConversationId: row['antigravityConversationId'].slice(0, 256) } : {}),
     ...(typeof row['runtimeCwd'] === 'string' ? { runtimeCwd: row['runtimeCwd'].slice(0, 4_096) } : {}),
     ...(row['isolated'] === true ? { isolated: true } : {}),
   }
@@ -206,6 +209,13 @@ export function configuredAgentGroups(models?: SessionModels): ModelGroup[] {
 }
 
 export function agentPermissionChoices(provider: string, hostPermission = 'workspace-write'): AgentPermissionChoice[] {
+  if (provider === AGENT_ROOM_ANTIGRAVITY_PROVIDER) {
+    return [
+      { value: 'read-only', name: 'Read only', description: 'Use Antigravity plan mode inside its sandbox.', isolated: false },
+      { value: 'workspace-write', name: 'Write in workspace', description: 'Use Antigravity accept-edits in an isolated worktree.', isolated: true },
+      { value: 'full-access', name: 'Full access', description: 'Use Antigravity accept-edits without its sandbox, inside an isolated worktree.', isolated: true },
+    ]
+  }
   if (provider === AGENT_ROOM_CODEX_PROVIDER) {
     return [
       { value: 'read-only', name: 'Read only', description: 'Audit without modifying files.', isolated: false },
@@ -245,8 +255,8 @@ export function defaultAgentRoomAgents(groups: ModelGroup[], hostPermission: str
     provider: candidate.group.id,
     model: candidate.model.id,
     ...(candidate.model.reasoning?.defaultEffort === undefined ? {} : { effort: candidate.model.reasoning.defaultEffort }),
-    permission: candidate.group.id === AGENT_ROOM_CODEX_PROVIDER ? 'read-only' : hostPermission,
-    effectivePermission: candidate.group.id === AGENT_ROOM_CODEX_PROVIDER ? 'read-only' : hostPermission,
+    permission: candidate.group.id === AGENT_ROOM_CODEX_PROVIDER || candidate.group.id === AGENT_ROOM_ANTIGRAVITY_PROVIDER ? 'read-only' : hostPermission,
+    effectivePermission: candidate.group.id === AGENT_ROOM_CODEX_PROVIDER || candidate.group.id === AGENT_ROOM_ANTIGRAVITY_PROVIDER ? 'read-only' : hostPermission,
     network: 'auto',
     role,
   }))

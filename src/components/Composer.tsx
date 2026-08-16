@@ -30,6 +30,7 @@ interface ComposerProps {
   onRemoveAttachment: (id: string) => void
   queue: QueueItem[]
   onQueueAction: (itemId: string, action: { kind: 'remove' | 'steer' } | { kind: 'edit'; text: string }) => void
+  supportsSteer?: boolean
 }
 
 export function Composer({
@@ -58,6 +59,7 @@ export function Composer({
   onRemoveAttachment,
   queue,
   onQueueAction,
+  supportsSteer = true,
 }: ComposerProps) {
   const composing = useRef(false)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -70,8 +72,8 @@ export function Composer({
   const hasContent = value.trim() !== '' || attachments.length > 0
   const sendLocked = disabled || busy
   const canSend = !sendLocked && hasContent
-  const assistantName = models?.current.provider === 'codex-cli' ? 'Codex' : 'DeepSeek'
-  const webProvider = models?.current.provider === 'codex-cli' ? 'Codex' : 'Host'
+  const assistantName = models?.current.provider === 'antigravity-cli' ? 'Antigravity' : models?.current.provider === 'codex-cli' ? 'Codex' : 'DeepSeek'
+  const webProvider = models?.current.provider === 'antigravity-cli' ? 'Antigravity' : models?.current.provider === 'codex-cli' ? 'Codex' : 'Host'
 
   useEffect(() => {
     if (!running || busy) setDeliveryMenuOpen(false)
@@ -114,7 +116,7 @@ export function Composer({
             if (event.nativeEvent.isComposing || composing.current || event.keyCode === 229) return
             event.preventDefault()
             if (event.repeat) return
-            if (canSend) onSend(running && (event.metaKey || event.ctrlKey) ? 'steer' : 'queue')
+            if (canSend) onSend(running && supportsSteer && (event.metaKey || event.ctrlKey) ? 'steer' : 'queue')
           }}
           placeholder={disabled ? 'Select a session to begin' : `Message ${assistantName}…`}
           disabled={disabled}
@@ -236,7 +238,7 @@ export function Composer({
                 >
                   <Icon name="send" size={14} />
                 </button>
-                <button
+                {supportsSteer && <button
                   type="button"
                   className="delivery-menu-trigger"
                   disabled={!canSend}
@@ -245,17 +247,17 @@ export function Composer({
                   onClick={() => setDeliveryMenuOpen(value => !value)}
                 >
                   <Icon name="chevron-down" size={11} />
-                </button>
-                {deliveryMenuOpen && (
+                </button>}
+                {supportsSteer && deliveryMenuOpen && (
                   <div className="delivery-menu" role="menu">
                     <button type="button" role="menuitem" onClick={() => submit('queue')}>
                       <span><strong>Queue</strong><small>After the current response · Enter</small></span>
                       <Icon name="check" size={12} />
                     </button>
-                    <button type="button" role="menuitem" onClick={() => submit('steer')}>
+                    {supportsSteer && <button type="button" role="menuitem" onClick={() => submit('steer')}>
                       <span><strong>Send now</strong><small>Guide the current turn · ⌘/Ctrl+Enter</small></span>
                       <Icon name="send" size={12} />
-                    </button>
+                    </button>}
                   </div>
                 )}
               </div>
@@ -278,7 +280,7 @@ export function Composer({
         </div>
       </div>
       <p className="composer-hint">{running
-        ? hasContent ? 'Enter to queue · ⌘/Ctrl + Enter to send now' : 'Type a follow-up while the agent works'
+        ? hasContent ? supportsSteer ? 'Enter to queue · ⌘/Ctrl + Enter to send now' : 'Enter to queue after the current response' : 'Type a follow-up while the agent works'
         : hasContent ? 'Enter to send' : 'Type a message to begin'} · Shift + Enter for a new line</p>
     </div>
   )

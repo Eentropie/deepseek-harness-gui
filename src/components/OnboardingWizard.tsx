@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { setupApi, subscribeSetup } from '../lib/api.ts'
-import type { CodexCatalog, SetupEvent, SetupSnapshot } from '../lib/types.ts'
+import type { AntigravityCatalog, CodexCatalog, SetupEvent, SetupSnapshot } from '../lib/types.ts'
 import { Icon } from './Icon.tsx'
 import { ModelsCredentialsSettings, type ProviderAccessSummary } from './ModelsCredentialsSettings.tsx'
 import { ProviderLogo } from './ProviderLogo.tsx'
@@ -9,10 +9,12 @@ import { WhaleLogo } from './WhaleLogo.tsx'
 interface OnboardingWizardProps {
   open: boolean
   codex: CodexCatalog
+  antigravity: AntigravityCatalog
   onClose: () => void
   onComplete: () => void
   onHostReady: () => Promise<void>
   onRefreshCodex: () => Promise<void>
+  onRefreshAntigravity: () => Promise<void>
 }
 
 function message(reason: unknown): string {
@@ -26,10 +28,12 @@ function StatusMark({ ready, optional = false }: { ready: boolean; optional?: bo
 export function OnboardingWizard({
   open,
   codex,
+  antigravity,
   onClose,
   onComplete,
   onHostReady,
   onRefreshCodex,
+  onRefreshAntigravity,
 }: OnboardingWizardProps) {
   const [setup, setSetup] = useState<SetupSnapshot>()
   const [checking, setChecking] = useState(false)
@@ -81,10 +85,10 @@ export function OnboardingWizard({
   }
 
   const hostModelReady = providerAccess.configuredCredentials > 0
-  const modelAccessReady = hostModelReady || codex.available
+  const modelAccessReady = hostModelReady || codex.available || antigravity.available
   const ready = setup?.host.online === true && modelAccessReady
-  const progress = useMemo(() => [setup?.host.online === true, hostModelReady, codex.available]
-    .filter(Boolean).length, [codex.available, hostModelReady, setup?.host.online])
+  const progress = useMemo(() => [setup?.host.online === true, hostModelReady, codex.available, antigravity.available]
+    .filter(Boolean).length, [antigravity.available, codex.available, hostModelReady, setup?.host.online])
 
   if (!open) return null
 
@@ -97,7 +101,7 @@ export function OnboardingWizard({
           <button type="button" className="icon-button quiet" onClick={onClose} aria-label="Close setup"><Icon name="x" size={15} /></button>
         </header>
 
-        <div className="onboarding-progress"><i style={{ width: `${progress * (100 / 3)}%` }} /><span>{progress} of 3 checks ready</span></div>
+        <div className="onboarding-progress"><i style={{ width: `${progress * 25}%` }} /><span>{progress} of 4 checks ready</span></div>
 
         <div className="onboarding-steps">
           <article className="onboarding-step" data-ready={setup?.host.online === true}>
@@ -123,10 +127,10 @@ export function OnboardingWizard({
           <article className="onboarding-step onboarding-model-step" data-ready={hostModelReady}>
             <div className="onboarding-step-icon"><Icon name="brain" size={18} /></div>
             <div className="onboarding-step-copy">
-              <header><strong>Model APIs</strong><StatusMark ready={hostModelReady} optional={codex.available} /></header>
+              <header><strong>Model APIs</strong><StatusMark ready={hostModelReady} optional={codex.available || antigravity.available} /></header>
               <p>{hostModelReady
                 ? `${providerAccess.configuredCredentials} Host credential${providerAccess.configuredCredentials === 1 ? '' : 's'} configured · ${providerAccess.liveModels} live models.`
-                : codex.available ? 'Optional when Codex is available. Add DeepSeek or another Host provider now or later.' : 'Configure DeepSeek or any other provider exposed by the Local Host. Stored keys are never read back.'}</p>
+                : codex.available || antigravity.available ? 'Optional when a subscription CLI is available. Add DeepSeek or another Host provider now or later.' : 'Configure DeepSeek or any other provider exposed by the Local Host. Stored keys are never read back.'}</p>
               <ModelsCredentialsSettings active={setup?.host.online === true} compact onSummary={setProviderAccess} />
             </div>
           </article>
@@ -141,6 +145,18 @@ export function OnboardingWizard({
               {!codex.available && <button type="button" onClick={() => { void setupApi.openExternal('codex-install') }}>Install guide</button>}
               <button type="button" onClick={() => { void setupApi.openCodexLogin().catch(reason => setFailure(message(reason))) }}>Open login</button>
               <button type="button" onClick={() => { void onRefreshCodex() }}>Recheck</button>
+            </div>
+          </article>
+
+          <article className="onboarding-step" data-ready={antigravity.available}>
+            <div className="onboarding-step-icon"><ProviderLogo provider="antigravity-cli" name={antigravity.models[0]?.name ?? 'Gemini'} size={20} /></div>
+            <div className="onboarding-step-copy">
+              <header><strong>Google · Antigravity CLI</strong><StatusMark ready={antigravity.available} optional /></header>
+              <p>{antigravity.available ? `${antigravity.models.length} subscription models discovered${antigravity.version === undefined ? '' : ` · ${antigravity.version}`}.` : antigravity.error ?? 'Install Antigravity CLI and complete Google sign-in in agy.'}</p>
+            </div>
+            <div className="onboarding-step-actions">
+              {!antigravity.available && <button type="button" onClick={() => { void setupApi.openExternal('antigravity-install') }}>Install guide</button>}
+              <button type="button" onClick={() => { void onRefreshAntigravity() }}>Recheck</button>
             </div>
           </article>
 
