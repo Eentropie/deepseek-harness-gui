@@ -6,6 +6,7 @@ import {
   independentAuditPrompt,
   judgmentPrompt,
   normalizeAgentRoom,
+  nonGitAgentPermissionFallback,
   rebuttalPrompt,
   type AgentRoomAgent,
 } from './agent-room.ts'
@@ -44,6 +45,14 @@ describe('Agent Room', () => {
     expect(agentPermissionChoices('antigravity-cli')[1]?.isolated).toBe(true)
   })
 
+  it('falls writable CLI audits back to real read-only mode outside Git', () => {
+    const error = 'Writable Agent Room agents require a Git workspace'
+    expect(nonGitAgentPermissionFallback('codex-cli', error)).toBe('read-only')
+    expect(nonGitAgentPermissionFallback('antigravity-cli', error)).toBe('read-only')
+    expect(nonGitAgentPermissionFallback('deepseek', error)).toBeUndefined()
+    expect(nonGitAgentPermissionFallback('codex-cli', 'permission denied')).toBeUndefined()
+  })
+
   it('freezes a bounded parent transcript for independent agents', () => {
     const context = buildAgentRoomContext('parent', [{
       id: 'm1', seq: 1, time: 1, role: 'user', blocks: [{ kind: 'text', text: 'Audit the permission bridge' }],
@@ -51,6 +60,7 @@ describe('Agent Room', () => {
     expect(context.sourceSessionId).toBe('parent')
     expect(context.transcript).toContain('Audit the permission bridge')
     expect(independentAuditPrompt('Audit auth', reviewer, context)).toContain('<frozen_parent_context>')
+    expect(independentAuditPrompt('Audit auth', reviewer, context)).toContain('Do not modify workspace files')
   })
 
   it('builds the three evidence-separated audit phases', () => {

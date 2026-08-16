@@ -1,4 +1,5 @@
 import type { ConversationMessage, MessageBlock, ProviderHandoffMessage } from './types.ts'
+import { isAgentRoomCapabilityText, stripAgentRoomDirective } from './agent-room-protocol.ts'
 import { isNetworkPolicyText } from './network-mode.ts'
 
 export const PROVIDER_HANDOFF_MARKER = '[[dsh-provider-handoff:v1]]'
@@ -10,7 +11,10 @@ export interface ProviderHandoffBatch {
 }
 
 function portableBlockText(block: MessageBlock): string | undefined {
-  if (block.kind === 'text') return block.text.trim() === '' ? undefined : block.text.trim()
+  if (block.kind === 'text') {
+    const text = stripAgentRoomDirective(block.text).trim()
+    return text === '' ? undefined : text
+  }
   if (block.kind === 'image') return `[Image attachment: ${block.name ?? block.label}]`
   if (block.kind === 'tool') return `[Tool used: ${block.name}]`
   return undefined
@@ -69,7 +73,7 @@ export function isProviderHandoffText(value: string): boolean {
 /** Hide model-only handoff context while preserving a fallback request's real user text. */
 export function visibleProviderText(value: string): string | undefined {
   if (isNetworkPolicyText(value)) return undefined
-  if (!isProviderHandoffText(value)) return value
+  if (!isProviderHandoffText(value) && !isAgentRoomCapabilityText(value)) return value
   const match = value.match(/<current_user_message>\n([\s\S]*?)\n<\/current_user_message>\s*$/)
   const visible = match?.[1]?.trim()
   return visible === undefined || visible === '' ? undefined : visible

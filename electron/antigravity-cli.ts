@@ -18,6 +18,7 @@ import type {
   ToolStatus,
 } from '../src/lib/types.ts'
 import { joinTurnBlocks } from '../src/lib/thought-process.ts'
+import { desktopAgentRoomCapability } from '../src/lib/agent-room-protocol.ts'
 import { providerHandoffText } from '../src/lib/provider-handoff.ts'
 import { antigravityExecutableCandidates, type AntigravityExecutableCandidate } from '../server/antigravity-executable.ts'
 import { antigravityNetworkInstruction, antigravityVariant, parseAntigravityModels } from '../server/antigravity-protocol.ts'
@@ -206,7 +207,7 @@ export class AntigravityCli {
     const variant = antigravityVariant(model, input.effort)
     if (variant === undefined) throw new Error(`${input.effort} is not supported by ${model.name}`)
     const turnId = randomUUID()
-    const args = this.promptArguments(input, variant)
+    const args = this.promptArguments(input, variant, model.name)
     const child = spawn(candidate.path, args, {
       cwd: input.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -265,11 +266,16 @@ export class AntigravityCli {
     this.activeByTurn.clear()
   }
 
-  private promptArguments(input: AntigravityPromptInput, variant: string): string[] {
+  private promptArguments(input: AntigravityPromptInput, variant: string, modelName: string): string[] {
     const handoff = input.context === undefined || input.context.length === 0
       ? ''
       : providerHandoffText('DeepSeek Harness', { messages: input.context, omitted: 0 })
-    const prompt = [antigravityNetworkInstruction(input.network), handoff, input.prompt].filter(Boolean).join('\n\n')
+    const prompt = [
+      antigravityNetworkInstruction(input.network),
+      desktopAgentRoomCapability('Antigravity', modelName),
+      handoff,
+      `<current_user_message>\n${input.prompt}\n</current_user_message>`,
+    ].filter(Boolean).join('\n\n')
     const args = [
       ...(input.conversationId === undefined ? [] : ['--conversation', input.conversationId]),
       '--print', prompt,

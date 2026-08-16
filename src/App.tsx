@@ -48,6 +48,7 @@ import { permissionOverrideForNewSession } from './lib/session-permission.ts'
 import { deepSeekNetworkPolicy, isNetworkMode } from './lib/network-mode.ts'
 import { isPlaceholderSidechatTitle, reconcileSidechatThreads } from './lib/sidechat-state.ts'
 import { allManagedAgentHostSessionIds, readAgentRoom } from './lib/agent-room.ts'
+import { desktopAgentRoomCapability, parseAgentRoomDirective } from './lib/agent-room-protocol.ts'
 import { useI18n } from './lib/i18n.tsx'
 import { TrailingTask } from './lib/trailing-task.ts'
 import { platformBasename as basename, shortcutLabel } from './lib/platform.ts'
@@ -579,6 +580,8 @@ export function App() {
     codex: ConversationMessage[]
     antigravity: ConversationMessage[]
   }>>({})
+  const agentRoomDirectiveArmedAt = useRef<Record<string, number>>({})
+  const handledAgentRoomDirectives = useRef(new Set<string>())
   const dark = themeMode === 'dark' || (themeMode === 'system' && systemDark)
   const startupGreeting = useMemo(() => {
     const key = `${GREETING_STORAGE_KEY}:${locale}`
@@ -2381,16 +2384,19 @@ export function App() {
     let restoreDraftKey = sourceDraftKey
     if (transition !== undefined) {
       setPendingTurns(current => ({ ...current, [sourceOwner]: transition }))
-      setDrafts(current => {
-        const { [sourceDraftKey]: _submitted, ...rest } = current
-        return rest
-      })
-      setAttachments([])
     }
+    // Clear optimistically before a CLI/Host round trip. This keeps the running
+    // composer stable and preserves anything the user types for the next turn.
+    setDrafts(current => {
+      const { [sourceDraftKey]: _submitted, ...rest } = current
+      return rest
+    })
+    setAttachments([])
     setBusy(true)
     setActionError(undefined)
     try {
       const sessionId = selectedId ?? await createSession()
+      agentRoomDirectiveArmedAt.current[sessionId] = Date.now() - 1_000
       if (wasPending) restoreDraftKey = sessionId
       if (transition !== undefined) {
         const targetOwner = subagentView?.childSessionId ?? sessionId
@@ -2418,10 +2424,6 @@ export function App() {
             ...queues,
             [sessionId]: [...(queues[sessionId] ?? []), item].slice(-40),
           }))
-          setDrafts(currentDrafts => {
-            const { [sourceDraftKey]: _submitted, ...rest } = currentDrafts
-            return rest
-          })
           return
         }
         const optimisticId = `antigravity-user-${Date.now()}`
@@ -2458,12 +2460,6 @@ export function App() {
         writeCodexSession(sessionId, nextCodex)
         antigravityTurnIdRef.current = result.turnId
         setAntigravityTurnId(result.turnId)
-        setDrafts(currentDrafts => {
-          const nextDrafts = { ...currentDrafts }
-          delete nextDrafts[sourceDraftKey]
-          delete nextDrafts[sessionId]
-          return nextDrafts
-        })
         return
       }
       if (codexActive) {
@@ -2507,10 +2503,6 @@ export function App() {
               throw reason
             }
           }
-          setDrafts(currentDrafts => {
-            const { [sourceDraftKey]: _submitted, ...rest } = currentDrafts
-            return rest
-          })
           return
         }
         const optimisticId = `codex-user-${Date.now()}`
@@ -2555,12 +2547,6 @@ export function App() {
         writeAntigravitySession(sessionId, nextAntigravity)
         codexTurnIdRef.current = result.turnId
         setCodexTurnId(result.turnId)
-        setDrafts(current => {
-          const nextDrafts = { ...current }
-          delete nextDrafts[sourceDraftKey]
-          delete nextDrafts[sessionId]
-          return nextDrafts
-        })
         return
       }
       if (wasPending && pendingModel !== undefined && pendingModel.provider !== CODEX_PROVIDER && pendingModel.provider !== ANTIGRAVITY_PROVIDER) {
@@ -2577,6 +2563,7 @@ export function App() {
         const handoff = collectProviderHandoff(mergeAllProviderTranscripts([], retainedCodexMessages, retainedAntigravityMessages), codexSession.deepSeekImportedCodexSeq ?? 0)
         const content: PromptContentPart[] = [
           { type: 'text', text: deepSeekNetworkPolicy(networkForTurn) },
+          { type: 'text', text: desktopAgentRoomCapability('DeepSeek', presentedModels?.current.model) },
           ...(handoff.messages.length === 0
             ? []
             : [{ type: 'text' as const, text: providerHandoffText('DeepSeek Harness', handoff) }]),
@@ -2598,10 +2585,6 @@ export function App() {
       releaseAttachments(submittedAttachments)
       const submittedIds = new Set(submittedAttachments.map(item => item.id))
       setAttachments(current => current.filter(item => !submittedIds.has(item.id)))
-      setDrafts(current => {
-        const { [sourceDraftKey]: _submitted, ...rest } = current
-        return rest
-      })
       void refreshChrome()
       window.setTimeout(() => {
         if (selectedRef.current !== sessionId) return
@@ -2630,18 +2613,18 @@ export function App() {
         setPendingTurns(current => Object.fromEntries(
           Object.entries(current).filter(([, item]) => item.id !== transition.id),
         ))
-        if (prompt !== '') {
-          setDrafts(current => {
-            const currentDraft = current[restoreDraftKey] ?? ''
-            const restored = currentDraft === '' ? prompt : `${prompt}\n\n${currentDraft}`
-            return { ...current, [restoreDraftKey]: restored }
-          })
-        }
-        setAttachments(current => {
-          const existing = new Set(current.map(item => item.id))
-          return [...submittedAttachments.filter(item => !existing.has(item.id)), ...current]
+      }
+      if (prompt !== '') {
+        setDrafts(current => {
+          const currentDraft = current[restoreDraftKey] ?? ''
+          const restored = currentDraft === '' ? prompt : `${prompt}\n\n${currentDraft}`
+          return { ...current, [restoreDraftKey]: restored }
         })
       }
+      setAttachments(current => {
+        const existing = new Set(current.map(item => item.id))
+        return [...submittedAttachments.filter(item => !existing.has(item.id)), ...current]
+      })
       setActionError(`发送失败：${errorText(reason)}`)
     } finally {
       setBusy(false)
@@ -3433,6 +3416,34 @@ export function App() {
   const activeJobs = subagentView === undefined
     ? (selectedId === undefined ? [] : jobsBySession[selectedId] ?? [])
     : (jobsBySession[subagentView.childSessionId] ?? [])
+
+  useEffect(() => {
+    if (selectedId === undefined || subagentView !== undefined || activeRunning) return
+    const armedAt = agentRoomDirectiveArmedAt.current[selectedId]
+    if (armedAt === undefined) return
+    for (let index = unifiedMessages.length - 1; index >= 0; index -= 1) {
+      const message = unifiedMessages[index]
+      if (message === undefined || message.role !== 'assistant' || message.streaming === true || message.time < armedAt) continue
+      const body = message.blocks.flatMap(block => block.kind === 'text' ? [block.text] : []).join('\n')
+      const directive = parseAgentRoomDirective(body)
+      if (directive === undefined) continue
+      const key = `${selectedId}:${message.id}:${directive.action}:${directive.text}`
+      if (handledAgentRoomDirectives.current.has(key)) return
+      handledAgentRoomDirectives.current.add(key)
+      if (directive.action === 'followup' && readAgentRoom(selectedId).finalOutput === undefined) {
+        setActionError(tr('Start an Agent Room audit before sending a room follow-up.', '请先启动一次 Agent Room 审计，再追问 Room。'))
+        return
+      }
+      setAgentRoomRequest({
+        id: crypto.randomUUID(),
+        kind: directive.action,
+        text: directive.text,
+        autoRun: true,
+      })
+      setInspectorOpen(true)
+      return
+    }
+  }, [activeRunning, selectedId, subagentView, tr, unifiedMessages])
 
   const openAgentRoomFromMain = (): void => {
     if (selectedId === undefined || subagentView !== undefined) {

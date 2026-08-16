@@ -234,6 +234,12 @@ export function agentPermissionChoices(provider: string, hostPermission = 'works
   ]
 }
 
+/** Writable CLI agents need Git worktrees; audits fall back safely outside Git. */
+export function nonGitAgentPermissionFallback(provider: string, message: string): 'read-only' | undefined {
+  if (provider !== AGENT_ROOM_CODEX_PROVIDER && provider !== AGENT_ROOM_ANTIGRAVITY_PROVIDER) return undefined
+  return /Writable Agent Room agents require a Git workspace/i.test(message) ? 'read-only' : undefined
+}
+
 export function defaultAgentRoomAgents(groups: ModelGroup[], hostPermission: string): AgentRoomAgent[] {
   const candidates = groups.flatMap(group => group.models.map(model => ({ group, model })))
   if (candidates.length === 0) return []
@@ -313,6 +319,7 @@ export function independentAuditPrompt(task: string, agent: AgentRoomAgent, cont
   return [
     '[Agent Room · Independent audit]',
     roleInstruction(agent.role),
+    'This is an evidence-only audit. Do not modify workspace files or run mutating commands, even if the runtime permission would allow it.',
     'Work independently. Do not assume another agent will catch an issue. Return findings ordered by severity, evidence, and a concise recommendation.',
     '',
     '<audit_task>',
@@ -326,6 +333,7 @@ export function roomFollowupPrompt(task: string, question: string, agent: AgentR
   return [
     '[Agent Room · Follow-up]',
     roleInstruction(agent.role),
+    'Keep this follow-up evidence-only. Do not modify workspace files.',
     'Answer the follow-up against the frozen parent context and prior verdict. State whether it changes the audit conclusion.',
     '', '<audit_task>', task.trim(), '</audit_task>',
     '', '<follow_up>', question.trim(), '</follow_up>',
@@ -347,6 +355,7 @@ export function rebuttalPrompt(task: string, agent: AgentRoomAgent, peerArtifact
   return [
     '[Agent Room · Cross rebuttal]',
     roleInstruction(agent.role),
+    'This is an evidence-only audit. Do not modify workspace files.',
     'Challenge the peer reports below. Confirm valid findings, reject unsupported claims, add missed risks, and identify the strongest remaining disagreement.',
     '',
     '<audit_task>',

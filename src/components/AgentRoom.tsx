@@ -13,6 +13,7 @@ import {
   independentAuditPrompt,
   judgmentPrompt,
   managedAgentHostSessionIds,
+  nonGitAgentPermissionFallback,
   readAgentRoom,
   rebuttalPrompt,
   roomFollowupPrompt,
@@ -36,6 +37,7 @@ export interface AgentRoomRequest {
   id: string
   kind: 'audit' | 'followup'
   text: string
+  autoRun?: boolean
 }
 
 interface AgentRoomProps {
@@ -130,6 +132,7 @@ export function AgentRoom({
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState<AgentDraft>()
   const [error, setError] = useState<string>()
+  const [notice, setNotice] = useState<string>()
   const [followup, setFollowup] = useState('')
   const stopped = useRef(false)
   const activeRuns = useRef(new Map<string, ActiveRun>())
@@ -165,6 +168,7 @@ export function AgentRoom({
     setRoom(next)
     setAdding(false)
     setError(undefined)
+    setNotice(undefined)
     onManagedHostSessions(managedAgentHostSessionIds(next))
   }, [onManagedHostSessions, parentSessionId])
 
@@ -290,12 +294,22 @@ export function AgentRoom({
     })
   }
 
-  const runtimeDirectory = async (agent: AgentRoomAgent): Promise<{ cwd: string; isolated: boolean }> => {
+  const runtimeDirectory = async (agent: AgentRoomAgent): Promise<{ cwd: string; isolated: boolean; permission: string }> => {
     if (cwd === undefined || parentSessionId === undefined) throw new Error('The main thread has no working directory')
     const permission = agentPermissionChoices(agent.provider, hostPermission).find(choice => choice.value === agent.permission)
-    if (permission?.isolated !== true) return { cwd, isolated: false }
-    const workspace = await agentWorkspaceApi.ensure({ parentSessionId, cwd, agentId: agent.id })
-    return { cwd: workspace.cwd, isolated: workspace.isolated }
+    if (permission?.isolated !== true) return { cwd, isolated: false, permission: agent.permission }
+    try {
+      const workspace = await agentWorkspaceApi.ensure({ parentSessionId, cwd, agentId: agent.id })
+      return { cwd: workspace.cwd, isolated: workspace.isolated, permission: agent.permission }
+    } catch (reason) {
+      const fallback = nonGitAgentPermissionFallback(agent.provider, errorText(reason))
+      if (fallback === undefined) throw reason
+      setNotice(tr(
+        'This folder is not a Git workspace. Writable Codex and Antigravity participants are running in their real read-only modes; the audit can continue without an isolated worktree.',
+        '当前文件夹不是 Git 工作区。Codex 与 Antigravity 的可写参与者已切换为真实只读模式，审计会在不创建隔离 worktree 的情况下继续。',
+      ))
+      return { cwd, isolated: false, permission: fallback }
+    }
   }
 
   const runCodex = async (agent: AgentRoomAgent, prompt: string, runtimeCwd: string): Promise<string> => {
@@ -461,11 +475,12 @@ export function AgentRoom({
     try {
       const agent = roomRef.current.agents.find(candidate => candidate.id === agentInput.id) ?? agentInput
       const runtime = await runtimeDirectory(agent)
-      const output = agent.provider === AGENT_ROOM_ANTIGRAVITY_PROVIDER
-        ? await runAntigravity(agent, prompt, runtime.cwd)
+      const effectiveAgent = runtime.permission === agent.permission ? agent : { ...agent, permission: runtime.permission }
+      const output = effectiveAgent.provider === AGENT_ROOM_ANTIGRAVITY_PROVIDER
+        ? await runAntigravity(effectiveAgent, prompt, runtime.cwd)
         : agent.provider === AGENT_ROOM_CODEX_PROVIDER
-          ? await runCodex(agent, prompt, runtime.cwd)
-          : await runHost(agent, prompt, runtime.cwd)
+          ? await runCodex(effectiveAgent, prompt, runtime.cwd)
+          : await runHost(effectiveAgent, prompt, runtime.cwd)
       updateArtifact({ ...artifact, status: 'completed', output, completedAt: Date.now() })
       return output
     } catch (reason) {
@@ -476,27 +491,29 @@ export function AgentRoom({
   }
 
   const handleRun = async (): Promise<void> => {
-    if (room.running || room.task.trim() === '' || parentSessionId === undefined || cwd === undefined) return
-    const participants = room.agents.filter(agent => agent.role !== 'judge')
+    const startingRoom = roomRef.current
+    if (startingRoom.running || startingRoom.task.trim() === '' || parentSessionId === undefined || cwd === undefined) return
+    const participants = startingRoom.agents.filter(agent => agent.role !== 'judge')
     if (participants.length < 2) {
       setError('Add at least two non-judge agents for independent review and cross rebuttal.')
       return
     }
-    const judge = room.agents.find(agent => agent.role === 'judge') ?? participants[0]
+    const judge = startingRoom.agents.find(agent => agent.role === 'judge') ?? participants[0]
     stopped.current = false
     setError(undefined)
+    setNotice(undefined)
     commitRoom(current => ({ ...current, running: true, phase: 'independent', artifacts: [], finalOutput: undefined }))
     try {
       const independent = await Promise.all(participants.map(async agent => ({
         agent,
-        output: await executeAgent(agent, independentAuditPrompt(room.task, agent, roomRef.current.context), 'independent'),
+        output: await executeAgent(agent, independentAuditPrompt(startingRoom.task, agent, roomRef.current.context), 'independent'),
       })))
       if (stopped.current) throw new Error('Agent Room stopped')
 
       commitRoom(current => ({ ...current, phase: 'rebuttal' }))
       const rebuttals = await Promise.all(participants.map(async agent => ({
         agent,
-        output: await executeAgent(agent, rebuttalPrompt(room.task, agent, independent
+        output: await executeAgent(agent, rebuttalPrompt(startingRoom.task, agent, independent
           .filter(item => item.agent.id !== agent.id)
           .map(item => ({ label: item.agent.label, output: item.output }))), 'rebuttal'),
       })))
@@ -507,7 +524,7 @@ export function AgentRoom({
         ...independent.map(item => ({ agent: item.agent.label, phase: 'independent' as const, output: item.output })),
         ...rebuttals.map(item => ({ agent: item.agent.label, phase: 'rebuttal' as const, output: item.output })),
       ]
-      const finalOutput = await executeAgent(judge, judgmentPrompt(room.task, evidence), 'judgment')
+      const finalOutput = await executeAgent(judge, judgmentPrompt(startingRoom.task, evidence), 'judgment')
       const completed = commitRoom(current => ({ ...current, running: false, phase: 'completed', finalOutput, reportStatus: 'pending' }))
       await onDeliverReport(agentRoomReport(completed), parentSessionId)
       commitRoom(current => ({ ...current, reportStatus: 'delivered' }))
@@ -578,12 +595,17 @@ export function AgentRoom({
         ...current,
         task: request.text.trim() || parentTitle || 'Audit the current thread',
         context,
-        agents: current.agents.length >= 2 ? current.agents : defaultAgentRoomAgents(groups, hostPermission),
+        agents: current.agents.filter(agent => agent.role !== 'judge').length >= 2
+          ? current.agents
+          : defaultAgentRoomAgents(groups, hostPermission),
         phase: 'idle',
         artifacts: [],
         finalOutput: undefined,
         reportStatus: undefined,
       }))
+      if (request.autoRun === true) {
+        window.setTimeout(() => { void handleRun() }, 0)
+      }
     } else {
       void handleFollowup(request.text)
     }
@@ -651,6 +673,7 @@ export function AgentRoom({
           {room.running ? <button type="button" className="agent-stop-button" onClick={() => { void handleStop() }}><Icon name="stop" size={12} /> Stop room</button> : <button type="button" className="agent-run-button" onClick={() => { void handleRun() }} disabled={room.task.trim() === '' || room.agents.filter(agent => agent.role !== 'judge').length < 2}><Icon name="sparkles" size={13} /> Run adversarial audit</button>}
           <span>{tr('Codex and Antigravity expose their real sandbox modes. DeepSeek displays the Local Host permission actually in effect.', 'Codex 与 Antigravity 显示真实沙箱模式；DeepSeek 显示 Local Host 当前真正生效的权限。')}</span>
         </div>
+        {notice !== undefined && <p className="agent-room-notice" role="status">{notice}</p>}
         {error !== undefined && <p className="agent-room-error">{error}</p>}
       </section>
 

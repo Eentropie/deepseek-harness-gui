@@ -2378,6 +2378,11 @@ a:focus-visible {
   border-radius: 999px 0 0 999px;
 }
 
+.delivery-split[data-split='false'] .send-button.queue-send {
+  width: 30px;
+  border-radius: 999px;
+}
+
 .delivery-menu-trigger {
   width: 22px;
   height: 30px;
@@ -3343,6 +3348,17 @@ a:focus-visible {
   border: 1px solid var(--border-strong);
   border-radius: 7px;
   color: var(--ink-soft);
+  background: var(--surface-soft);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.agent-room-notice {
+  margin: 8px 0 0;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--muted-2);
   background: var(--surface-soft);
   font-size: 8px;
   line-height: 1.4;

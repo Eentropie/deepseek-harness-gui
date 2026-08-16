@@ -4,6 +4,7 @@ import { Markdown } from './Markdown.tsx'
 import { ProviderLogo } from './ProviderLogo.tsx'
 import { WhaleLogo } from './WhaleLogo.tsx'
 import { conversationMessagesEqual } from '../lib/history.ts'
+import { stripAgentRoomDirective } from '../lib/agent-room-protocol.ts'
 import type { ConversationMessage, MessageBlock, ProcessBlock } from '../lib/types.ts'
 import { ToolCard } from './ToolCard.tsx'
 
@@ -43,7 +44,8 @@ function CopyButton({ text }: { text: string }) {
 
 function blockText(blocks: MessageBlock[]): string {
   return blocks.flatMap(block => {
-    if (block.kind === 'text' || block.kind === 'reasoning') return [block.text]
+    if (block.kind === 'text') return [stripAgentRoomDirective(block.text)]
+    if (block.kind === 'reasoning') return [block.text]
     if (block.kind === 'tool') return [`${block.name}\n${block.arguments}`]
     if (block.kind === 'thought') return [blockText(block.blocks)]
     return []
@@ -124,7 +126,7 @@ function ProcessContent({ block, active }: { block: ProcessBlock; active: boolea
 function RenderBlock({ block, active = false }: { block: MessageBlock; active?: boolean }) {
   switch (block.kind) {
     case 'text':
-      return <Markdown>{block.text}</Markdown>
+      return <Markdown>{stripAgentRoomDirective(block.text)}</Markdown>
     case 'reasoning':
       return (
         <ThoughtDetails active={active}>

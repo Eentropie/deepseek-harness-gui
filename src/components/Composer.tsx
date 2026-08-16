@@ -222,8 +222,9 @@ export function Composer({
               <button type="button" className="send-button stop" onClick={() => { setDeliveryMenuOpen(false); onStop() }} disabled={busy} aria-label="Stop">
                 <Icon name="stop" size={14} />
               </button>
-              <div
+              {hasContent && <div
                 className="delivery-split"
+                data-split={supportsSteer}
                 onBlur={event => {
                   if (!event.currentTarget.contains(event.relatedTarget)) setDeliveryMenuOpen(false)
                 }}
@@ -260,7 +261,7 @@ export function Composer({
                     </button>}
                   </div>
                 )}
-              </div>
+              </div>}
             </div>
           ) : (
             <button

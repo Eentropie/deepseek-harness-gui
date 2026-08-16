@@ -19,6 +19,7 @@ import { codexExecutableCandidates, type CodexExecutableCandidate } from '../ser
 import { codexExecutionPolicy } from '../server/codex-permissions.ts'
 import { normalizeCodexModels, normalizeCodexUsage, projectCodexThread, projectCodexToolItem } from '../server/codex-protocol.ts'
 import { codexWebSearchMode } from '../src/lib/network-mode.ts'
+import { desktopAgentRoomCapability } from '../src/lib/agent-room-protocol.ts'
 
 interface PendingRequest {
   resolve: (value: unknown) => void
@@ -224,7 +225,7 @@ export class CodexAppServer {
     }
     this.sessionByThread.set(threadId, input.sessionId)
 
-    let prompt = input.prompt
+    let handoffFallback = ''
     if (input.context !== undefined && input.context.length > 0) {
       try {
         await this.request('thread/inject_items', {
@@ -239,9 +240,14 @@ export class CodexAppServer {
           })),
         }, 60_000)
       } catch {
-        prompt = `${providerHandoffText('DeepSeek', { messages: input.context, omitted: 0 })}\n\n<current_user_message>\n${input.prompt}\n</current_user_message>`
+        handoffFallback = providerHandoffText('DeepSeek', { messages: input.context, omitted: 0 })
       }
     }
+    const prompt = [
+      desktopAgentRoomCapability('Codex', selected.name),
+      handoffFallback,
+      `<current_user_message>\n${input.prompt}\n</current_user_message>`,
+    ].filter(Boolean).join('\n\n')
 
     const response = record(await this.request('turn/start', {
       threadId,
@@ -274,7 +280,11 @@ export class CodexAppServer {
     const response = record(await this.request('turn/steer', {
       threadId,
       expectedTurnId: turnId,
-      input: [{ type: 'text', text: prompt, text_elements: [] }],
+      input: [{
+        type: 'text',
+        text: `${desktopAgentRoomCapability('Codex')}\n\n<current_user_message>\n${prompt}\n</current_user_message>`,
+        text_elements: [],
+      }],
     }, 60_000))
     const steeredTurnId = string(response?.['turnId'])
     if (steeredTurnId === undefined) throw new Error('Codex did not confirm the steered turn')

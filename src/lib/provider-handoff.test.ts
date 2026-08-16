@@ -9,6 +9,7 @@ import {
   visibleProviderText,
 } from './provider-handoff.ts'
 import { deepSeekNetworkPolicy } from './network-mode.ts'
+import { desktopAgentRoomCapability } from './agent-room-protocol.ts'
 
 function message(seq: number, role: 'user' | 'assistant', text: string, time = seq): ConversationMessage {
   return { id: String(seq), seq, time, role, blocks: [{ kind: 'text', text }] }
@@ -66,5 +67,11 @@ describe('provider handoff', () => {
   it('keeps renderer-only network policy messages out of visible chat', () => {
     expect(visibleProviderText(deepSeekNetworkPolicy('auto'))).toBeUndefined()
     expect(visibleProviderText(deepSeekNetworkPolicy('off'))).toBeUndefined()
+  })
+
+  it('hides the Agent Room broker instruction but keeps its wrapped user message', () => {
+    const capability = desktopAgentRoomCapability('Codex')
+    expect(visibleProviderText(capability)).toBeUndefined()
+    expect(visibleProviderText(`${capability}\n\n<current_user_message>\nRun an Agent Room audit\n</current_user_message>`)).toBe('Run an Agent Room audit')
   })
 })
