@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+import type { ConversationMessage } from '../lib/types.ts'
 import { SidechatPanel } from './SidechatPanel.tsx'
 
 const noop = (): void => undefined
 
 afterEach(() => vi.unstubAllGlobals())
 
-function render(threads: Array<{ id: string; title: string }>, owner?: string): string {
+function render(threads: Array<{ id: string; title: string }>, owner?: string, messages: ConversationMessage[] = [], running = false): string {
   vi.stubGlobal('localStorage', {
     getItem: () => null,
     setItem: noop,
@@ -19,8 +20,8 @@ function render(threads: Array<{ id: string; title: string }>, owner?: string): 
     provider="DeepSeek"
     permissionOptions={[]}
     network="auto"
-    messages={[]}
-    running={false}
+    messages={messages}
+    running={running}
     onSend={noop}
     onStop={noop}
     onNewThread={noop}
@@ -47,5 +48,20 @@ describe('SidechatPanel thread controls', () => {
     expect(markup).toContain('No sidechats open')
     expect(markup).toContain('New sidechat')
     expect(markup).not.toContain('sidechat-composer')
+  })
+
+  it('shows the live thought process while a sidechat turn is running', () => {
+    const markup = render([{ id: 'one', title: 'Live review' }], 'sidechat:main:one', [{
+      id: 'assistant-live',
+      seq: 2,
+      time: 1,
+      role: 'assistant',
+      streaming: true,
+      blocks: [{ kind: 'reasoning', text: 'Inspecting the workspace' }],
+    }], true)
+
+    expect(markup).toContain('<details class="sidechat-thought" open="">')
+    expect(markup).toContain('<summary>Thinking</summary>')
+    expect(markup).toContain('Inspecting the workspace')
   })
 })

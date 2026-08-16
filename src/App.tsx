@@ -1351,7 +1351,7 @@ export function App() {
       if (active && generation === sidechatGeneration.current) setSidechatError(errorText(reason))
     })
     return () => { active = false }
-  }, [sidechatAntigravityActive, sidechatCodexActive, sidechatHostSessionId, sidechatOwner])
+  }, [sidechatAntigravityActive, sidechatCodexActive, sidechatOwner])
 
   useEffect(() => subscribeCodex((event: CodexEvent) => {
     if (event.type === 'usage-updated') return
@@ -2284,6 +2284,7 @@ export function App() {
       await harnessApi.selectModel(hostSessionId, sidechatSelection.provider, sidechatSelection.model, sidechatSelection.effort)
       if (sidechatSelection.permission !== DEFAULT_HOST_PERMISSION) await harnessApi.setPermission(hostSessionId, sidechatSelection.permission)
       const baselineAssistantCount = sidechatMessages.filter(message => message.role === 'assistant').length
+      const baselineUserCount = sidechatMessages.filter(message => message.role === 'user').length
       const content: PromptContentPart[] = [
         { type: 'text', text: deepSeekNetworkPolicy(networkForTurn) },
         ...(created && handoff.messages.length > 0
@@ -2300,8 +2301,9 @@ export function App() {
         if (generation !== sidechatGeneration.current) return
         const projected = projectConversation(page.events)
         observedAnswer ||= projected.filter(message => message.role === 'assistant').length > baselineAssistantCount
+        const observedPrompt = projected.filter(message => message.role === 'user').length > baselineUserCount
         const running = list.items.find(item => item.sessionId === hostSessionId)?.running === true
-        setSidechatMessages(projected)
+        setSidechatMessages(observedPrompt ? projected : [...projected, optimistic])
         setSidechatRunning(running || !observedAnswer)
         if (observedAnswer && !running) break
       }

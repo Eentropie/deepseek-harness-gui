@@ -2202,11 +2202,6 @@ a:focus-visible {
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 
-.composer-card:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 38%, var(--border-strong));
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.11), 0 0 0 2px color-mix(in srgb, var(--accent) 8%, transparent);
-}
-
 .composer-card[data-disabled='true'] {
   opacity: 0.68;
 }
@@ -7884,10 +7879,6 @@ a:focus-visible {
 .composer-card {
   transform: translateY(0);
   transition: border-color 170ms ease, box-shadow 220ms ease, transform 220ms var(--motion-settle);
-}
-
-.composer-card:focus-within {
-  transform: translateY(-1px);
 }
 
 .send-button {

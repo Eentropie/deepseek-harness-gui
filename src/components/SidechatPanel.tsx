@@ -33,10 +33,10 @@ function draftKey(owner?: string): string {
   return `dsh-workbench-sidechat-draft:${owner ?? 'none'}`
 }
 
-function SidechatBlock({ block }: { block: MessageBlock }) {
+function SidechatBlock({ block, running }: { block: MessageBlock; running: boolean }) {
   if (block.kind === 'text') return <Markdown>{block.text}</Markdown>
-  if (block.kind === 'reasoning') return <details className="sidechat-thought"><summary>Thought process</summary><Markdown>{block.text}</Markdown></details>
-  if (block.kind === 'thought') return <details className="sidechat-thought"><summary>Thought process</summary><div>{block.blocks.map((nested, index) => <SidechatBlock block={nested} key={index} />)}</div></details>
+  if (block.kind === 'reasoning') return <details className="sidechat-thought" open={running}><summary>{running ? 'Thinking' : 'Thought process'}</summary><Markdown>{block.text}</Markdown></details>
+  if (block.kind === 'thought') return <details className="sidechat-thought" open={running}><summary>{running ? 'Thinking' : 'Thought process'}</summary><div>{block.blocks.map((nested, index) => <SidechatBlock block={nested} running={running} key={index} />)}</div></details>
   if (block.kind === 'tool') return <ToolCard block={block} compact />
   if (block.kind === 'image') return <div className="sidechat-tool"><span>{block.label}</span></div>
   return null
@@ -68,6 +68,7 @@ export function SidechatPanel({ owner, parentTitle, threads, activeThreadId, pro
   }
   const currentModel = models?.groups.find(group => group.id === models.current.provider)?.models.find(model => model.id === models.current.model)
   const efforts = currentModel?.reasoning?.efforts ?? []
+  const activeAssistantId = running ? [...messages].reverse().find(message => message.role === 'assistant')?.id : undefined
 
   return (
     <div className="sidechat-panel">
@@ -99,7 +100,7 @@ export function SidechatPanel({ owner, parentTitle, threads, activeThreadId, pro
         {messages.map(message => (
           <article className="sidechat-message" data-role={message.role} key={message.id}>
             <header>{message.role === 'assistant' && <ProviderLogo provider={message.agent ?? provider} name={message.modelName} size={12} />}{message.role === 'user' ? 'You' : message.agent ?? provider}</header>
-            {message.blocks.map((block, index) => <SidechatBlock block={block} key={`${message.id}-${index}`} />)}
+            {message.blocks.map((block, index) => <SidechatBlock block={block} running={message.streaming === true || message.id === activeAssistantId} key={`${message.id}-${index}`} />)}
           </article>
         ))}
         {running && <div className="sidechat-thinking"><i /><i /><i /><span>Working in sidechat…</span></div>}
