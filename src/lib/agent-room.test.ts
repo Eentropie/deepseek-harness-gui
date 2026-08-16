@@ -9,6 +9,7 @@ import {
   normalizeAgentRoom,
   nonGitAgentPermissionFallback,
   rebuttalPrompt,
+  resolvedAgentRoomEffort,
   type AgentRoomAgent,
 } from './agent-room.ts'
 
@@ -41,6 +42,21 @@ describe('Agent Room', () => {
     expect(agentRoomEffortLabel('anthropic', { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }, { id: 'high', name: 'High' })).toBe('Thinking')
     expect(agentRoomEffortLabel('antigravity-cli', { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }, { id: 'thinking', name: 'Thinking' })).toBe('Thinking')
     expect(agentRoomEffortLabel('codex-cli', { id: 'gpt-5', name: 'GPT-5' }, { id: 'high', name: 'High' })).toBe('High')
+  })
+
+  it('migrates a stale Claude high effort to the live thinking variant', () => {
+    const groups = [{
+      id: 'antigravity-cli',
+      name: 'Antigravity',
+      models: [{
+        id: 'claude-sonnet-4-6',
+        name: 'Claude Sonnet 4.6',
+        reasoning: { efforts: [{ id: 'thinking', name: 'Thinking' }], defaultEffort: 'thinking' },
+      }],
+    }]
+
+    expect(resolvedAgentRoomEffort(groups, 'antigravity-cli', 'claude-sonnet-4-6', 'high')).toBe('thinking')
+    expect(resolvedAgentRoomEffort(groups, 'antigravity-cli', 'claude-sonnet-4-6', 'thinking')).toBe('thinking')
   })
 
   it('uses the real Host permission for DeepSeek and a real read-only Codex sandbox', () => {

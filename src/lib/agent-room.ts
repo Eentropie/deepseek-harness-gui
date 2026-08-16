@@ -215,6 +215,18 @@ export function agentRoomEffortLabel(provider: string, model: Pick<ModelEntry, '
   return claude && /^(?:high|thinking)$/i.test(effort.id) ? 'Thinking' : effort.name
 }
 
+/** Reconcile persisted Agent Room choices with the live provider catalog before a run. */
+export function resolvedAgentRoomEffort(groups: ModelGroup[], provider: string, model: string, current?: string): string | undefined {
+  const entry = groups.find(group => group.id === provider)?.models.find(candidate => candidate.id === model)
+  const efforts = entry?.reasoning?.efforts ?? []
+  if (efforts.length === 0) return undefined
+  if (current !== undefined && efforts.some(effort => effort.id === current)) return current
+  const source = `${provider} ${entry?.id ?? model} ${entry?.name ?? ''}`
+  if (/(?:claude|anthropic)/i.test(source) && current === 'high' && efforts.some(effort => effort.id === 'thinking')) return 'thinking'
+  const preferred = entry?.reasoning?.defaultEffort
+  return preferred !== undefined && efforts.some(effort => effort.id === preferred) ? preferred : efforts[0]?.id
+}
+
 export function agentPermissionChoices(provider: string, hostPermission = 'workspace-write'): AgentPermissionChoice[] {
   if (provider === AGENT_ROOM_ANTIGRAVITY_PROVIDER) {
     return [

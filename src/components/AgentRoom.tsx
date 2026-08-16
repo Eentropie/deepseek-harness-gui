@@ -6,6 +6,7 @@ import {
   AGENT_ROOM_ROLES,
   agentRoomReport,
   agentRoomEffortLabel,
+  resolvedAgentRoomEffort,
   agentPermissionChoices,
   agentRoomOwnerId,
   buildAgentRoomContext,
@@ -210,6 +211,22 @@ export function AgentRoom({
   const selectedModel = selectedGroup?.models.find(model => model.id === draft?.model)
   const selectedPermissions = draft === undefined ? [] : agentPermissionChoices(draft.provider, hostPermission)
 
+  useEffect(() => {
+    if (parentSessionId === undefined || groups.length === 0) return
+    commitRoom(current => {
+      let changed = false
+      const agents = current.agents.map(agent => {
+        const entry = groups.find(group => group.id === agent.provider)?.models.find(model => model.id === agent.model)
+        if (entry === undefined || (entry.reasoning?.efforts.length ?? 0) === 0) return agent
+        const effort = resolvedAgentRoomEffort(groups, agent.provider, agent.model, agent.effort)
+        if (effort === agent.effort) return agent
+        changed = true
+        return { ...agent, effort }
+      })
+      return changed ? { ...current, agents } : current
+    })
+  }, [commitRoom, groups, parentSessionId])
+
   const prepareNetworkRound = useCallback((agents: AgentRoomAgent[]): void => {
     roundNetworkDecision.current = agents.some(agent => agent.network === 'ask')
       && window.confirm(tr(
@@ -335,7 +352,9 @@ export function AgentRoom({
   }
 
   const runCodex = async (agent: AgentRoomAgent, prompt: string, runtimeCwd: string): Promise<string> => {
-    if (parentSessionId === undefined || agent.effort === undefined) throw new Error('Codex model metadata is unavailable')
+    const effort = resolvedAgentRoomEffort(groups, agent.provider, agent.model, agent.effort)
+    if (parentSessionId === undefined || effort === undefined) throw new Error('Codex model metadata is unavailable')
+    if (effort !== agent.effort) updateAgent(agent.id, { effort })
     const owner = agentRoomOwnerId(parentSessionId, agent.id)
     let completed: Extract<CodexEvent, { type: 'turn-completed' }> | undefined
     let failed: Error | undefined
@@ -358,7 +377,7 @@ export function AgentRoom({
         ...(agent.codexThreadId === undefined ? {} : { threadId: agent.codexThreadId }),
         cwd: runtimeCwd,
         model: agent.model,
-        effort: agent.effort,
+        effort,
         permission: agent.permission,
         network: networkForAgent(agent.network),
         prompt,
@@ -381,7 +400,8 @@ export function AgentRoom({
   }
 
   const runAntigravity = async (agent: AgentRoomAgent, prompt: string, runtimeCwd: string): Promise<string> => {
-    if (parentSessionId === undefined || agent.effort === undefined) throw new Error('Antigravity model metadata is unavailable')
+    const effort = resolvedAgentRoomEffort(groups, agent.provider, agent.model, agent.effort)
+    if (parentSessionId === undefined || effort === undefined) throw new Error('Antigravity model metadata is unavailable')
     const owner = agentRoomOwnerId(parentSessionId, agent.id)
     let completed: Extract<AntigravityEvent, { type: 'turn-completed' }> | undefined
     let failed: Error | undefined
@@ -399,7 +419,7 @@ export function AgentRoom({
     })
     try {
       const permission = agent.permission as AntigravityPermissionMode
-      const effort = agent.effort
+      if (effort !== agent.effort) updateAgent(agent.id, { effort })
       updateAgent(agent.id, { effectivePermission: permission })
       const network = networkForAgent(agent.network)
       const start = (conversationId?: string) => antigravityApi.prompt({
@@ -445,6 +465,8 @@ export function AgentRoom({
   }
 
   const runHost = async (agent: AgentRoomAgent, prompt: string, runtimeCwd: string): Promise<string> => {
+    const effort = resolvedAgentRoomEffort(groups, agent.provider, agent.model, agent.effort)
+    if (effort !== agent.effort) updateAgent(agent.id, { effort })
     let sessionId = agent.runtimeCwd === runtimeCwd ? agent.hostSessionId : undefined
     if (sessionId === undefined) {
       const created = await harnessApi.createSession({
@@ -457,7 +479,7 @@ export function AgentRoom({
     }
     activeRuns.current.set(agent.id, { kind: 'host', hostSessionId: sessionId })
     try {
-      await harnessApi.selectModel(sessionId, agent.provider, agent.model, agent.effort)
+      await harnessApi.selectModel(sessionId, agent.provider, agent.model, effort)
       const permissionPage = await harnessApi.history(sessionId)
       const effectivePermission = permissionPage.projections?.values.permissions?.currentValue ?? hostPermission
       updateAgent(agent.id, { permission: effectivePermission, effectivePermission })
