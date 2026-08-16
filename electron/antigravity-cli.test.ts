@@ -24,7 +24,7 @@ describe('Antigravity CLI desktop bridge', () => {
     const fixture = await mkdtemp(join(tmpdir(), 'dsh-antigravity-cli-'))
     temporaryDirectories.push(fixture)
     const executable = join(fixture, 'agy')
-    const stateFile = join(fixture, 'state', 'antigravity-sessions.json')
+    const stateFile = join(fixture, 'antigravity-sessions.json')
     await writeFile(executable, `#!/bin/sh
 if [ "$1" = "--version" ]; then
   printf '1.2.3\\n'
@@ -142,6 +142,112 @@ rmdir '${lockDirectory}'
     expect(first.conversationId).toBe('conversation-1')
     expect(second.conversationId).toBe('conversation-2')
     expect(await readFile(countFile, 'utf8')).toBe('2')
+    cli.shutdown()
+  })
+
+  it('omits unsupported effort flags and migrates persisted empty assistant messages', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'dsh-antigravity-fixed-effort-'))
+    temporaryDirectories.push(fixture)
+    const executable = join(fixture, 'agy')
+    const stateFile = join(fixture, 'antigravity-sessions.json')
+    await writeFile(stateFile, JSON.stringify({
+      version: 1,
+      conversations: {
+        'conversation-existing': [{
+          id: 'empty-old-turn', seq: 1, time: 1, role: 'assistant', agent: 'Antigravity',
+          modelName: 'Claude Sonnet 4.6', blocks: [], streaming: false,
+        }],
+      },
+    }), { mode: 0o600 })
+    await writeFile(executable, `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf '1.2.3\\n'
+  exit 0
+fi
+if [ "$1" = "models" ]; then
+  printf 'claude-sonnet-4-6\\tClaude Sonnet 4.6 (Thinking)\\n'
+  exit 0
+fi
+for argument in "$@"; do
+  if [ "$argument" = "--effort" ]; then
+    printf '%s\\n' '{"event":"result","result":{"status":"ERROR","error":"effort is unsupported"}}'
+    exit 1
+  fi
+done
+printf '%s\\n' '{"event":"init","conversation_id":"conversation-existing"}'
+printf '%s\\n' '{"event":"result","result":{"status":"SUCCESS","response":"Claude response."}}'
+`, { mode: 0o700 })
+    await chmod(executable, 0o700)
+    process.env['DEEPSEEK_HARNESS_ANTIGRAVITY_BIN'] = executable
+
+    let completeTurn: (() => void) | undefined
+    const completed = new Promise<void>(resolve => { completeTurn = resolve })
+    const cli = new AntigravityCli(stateFile, event => {
+      if (event.type === 'turn-completed') completeTurn?.()
+    })
+    const catalog = await cli.catalog(true)
+    expect(catalog.models[0]).toMatchObject({
+      id: 'claude-sonnet-4-6', defaultEffort: 'thinking', efforts: [{ id: 'thinking' }],
+    })
+    await cli.prompt({
+      sessionId: 'session-test',
+      conversationId: 'conversation-existing',
+      cwd: fixture,
+      model: 'claude-sonnet-4-6',
+      effort: 'thinking',
+      permission: 'read-only',
+      network: 'off',
+      prompt: 'Continue with Claude.',
+    })
+    await completed
+
+    const snapshot = await cli.readThread('conversation-existing')
+    expect(snapshot.messages.map(message => [message.role, message.blocks.length])).toEqual([
+      ['user', 1],
+      ['assistant', 1],
+    ])
+    expect(snapshot.messages[1]?.blocks).toEqual([{ kind: 'text', text: 'Claude response.' }])
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const persisted = JSON.parse(await readFile(stateFile, 'utf8')) as { conversations: Record<string, Array<{ blocks: unknown[] }>> }
+    expect(persisted.conversations['conversation-existing']?.every(message => message.blocks.length > 0)).toBe(true)
+    cli.shutdown()
+  })
+
+  it('surfaces a pre-initialization result error without creating an empty turn', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'dsh-antigravity-pre-init-error-'))
+    temporaryDirectories.push(fixture)
+    const executable = join(fixture, 'agy')
+    const stateFile = join(fixture, 'antigravity-sessions.json')
+    await writeFile(executable, `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf '1.2.3\\n'
+  exit 0
+fi
+if [ "$1" = "models" ]; then
+  printf 'gemini-test-high\\tGemini Test (High)\\n'
+  exit 0
+fi
+printf '%s\\n' '{"event":"result","result":{"status":"ERROR","error":"fixture pre-init failure"}}'
+exit 1
+`, { mode: 0o700 })
+    await chmod(executable, 0o700)
+    process.env['DEEPSEEK_HARNESS_ANTIGRAVITY_BIN'] = executable
+
+    const events: AntigravityEvent[] = []
+    const cli = new AntigravityCli(stateFile, event => events.push(event))
+    await cli.catalog(true)
+    await expect(cli.prompt({
+      sessionId: 'session-test',
+      conversationId: 'conversation-existing',
+      cwd: fixture,
+      model: 'gemini-test',
+      effort: 'high',
+      permission: 'read-only',
+      network: 'off',
+      prompt: 'This must fail before init.',
+    })).rejects.toThrow('fixture pre-init failure')
+    expect((await cli.readThread('conversation-existing')).messages).toEqual([])
+    expect(events.some(event => event.type === 'turn-completed')).toBe(false)
     cli.shutdown()
   })
 })

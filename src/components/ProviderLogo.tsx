@@ -1,9 +1,9 @@
 import antGroupMark from '@lobehub/icons-static-svg/icons/antgroup.svg?raw'
-import anthropicMark from '@lobehub/icons-static-svg/icons/anthropic.svg?raw'
 import azureAiMark from '@lobehub/icons-static-svg/icons/azureai.svg?raw'
 import bedrockMark from '@lobehub/icons-static-svg/icons/bedrock.svg?raw'
 import cerebrasMark from '@lobehub/icons-static-svg/icons/cerebras.svg?raw'
 import cloudflareMark from '@lobehub/icons-static-svg/icons/cloudflare.svg?raw'
+import claudeMark from '@lobehub/icons-static-svg/icons/claude.svg?raw'
 import cohereMark from '@lobehub/icons-static-svg/icons/cohere.svg?raw'
 import copilotMark from '@lobehub/icons-static-svg/icons/githubcopilot.svg?raw'
 import deepseekMark from '@lobehub/icons-static-svg/icons/deepseek.svg?raw'
@@ -57,7 +57,7 @@ const BRAND_MATCHES: BrandMatch[] = [
   { pattern: /\b(?:github[ -]?copilot|copilot)\b/, id: 'github-copilot', label: 'GitHub Copilot', asset: copilotMark },
   { pattern: /\b(?:amazon|aws|bedrock)\b/, id: 'amazon-bedrock', label: 'Amazon Bedrock', asset: bedrockMark },
   { pattern: /\b(?:ant[ -]?ling|antling|ant[ -]?group)\b/, id: 'ant-group', label: 'Ant Group Ling', asset: antGroupMark },
-  { pattern: /\b(?:claude|anthropic)\b/, id: 'anthropic', label: 'Anthropic', asset: anthropicMark },
+  { pattern: /\b(?:claude|anthropic)\b/, id: 'claude', label: 'Claude', asset: claudeMark },
   { pattern: /\bcloudflare\b/, id: 'cloudflare', label: 'Cloudflare', asset: cloudflareMark },
   { pattern: /\b(?:hugging[ -]?face|huggingface)\b/, id: 'hugging-face', label: 'Hugging Face', asset: huggingFaceMark },
   { pattern: /\b(?:kimi(?:[ -]?coding)?)\b/, id: 'kimi', label: 'Kimi', asset: kimiMark },

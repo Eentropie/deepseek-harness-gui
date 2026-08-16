@@ -5,6 +5,7 @@ import type { TerminalEvent } from '../lib/types.ts'
 import { Icon } from './Icon.tsx'
 
 interface TerminalDockProps {
+  sessionId?: string
   cwd?: string
   onClose: () => void
 }
@@ -36,7 +37,7 @@ function errorText(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason)
 }
 
-export function TerminalDock({ cwd, onClose }: TerminalDockProps) {
+export function TerminalDock({ sessionId, cwd, onClose }: TerminalDockProps) {
   const [currentCwd, setCurrentCwd] = useState(cwd)
   const [command, setCommand] = useState('')
   const [chunks, setChunks] = useState<TerminalChunk[]>([])
@@ -75,6 +76,11 @@ export function TerminalDock({ cwd, onClose }: TerminalDockProps) {
     setRunningId(undefined)
   }), [])
 
+  useEffect(() => () => {
+    const id = activeId.current
+    if (id !== undefined) void terminalApi.stop(id).catch(() => undefined)
+  }, [])
+
   useEffect(() => {
     const element = output.current
     if (element !== null) element.scrollTop = element.scrollHeight
@@ -82,7 +88,7 @@ export function TerminalDock({ cwd, onClose }: TerminalDockProps) {
 
   const run = async (): Promise<void> => {
     const value = command.trim()
-    if (value === '' || runningId !== undefined || currentCwd === undefined) return
+    if (value === '' || runningId !== undefined || currentCwd === undefined || sessionId === undefined) return
     setCommand('')
     setHistory(current => [value, ...current.filter(item => item !== value)].slice(0, 80))
     setHistoryIndex(-1)
@@ -94,7 +100,7 @@ export function TerminalDock({ cwd, onClose }: TerminalDockProps) {
     const cd = value.match(/^cd(?:\s+([\s\S]*))?$/)
     if (cd !== null) {
       try {
-        const next = await terminalApi.changeDirectory(currentCwd, cd[1] ?? '')
+        const next = await terminalApi.changeDirectory(sessionId, currentCwd, cd[1] ?? '')
         setCurrentCwd(next)
         setChunks(current => appendChunk(current, { id: `cwd-${Date.now()}`, tone: 'system', text: next }))
       } catch (reason) {
@@ -110,7 +116,7 @@ export function TerminalDock({ cwd, onClose }: TerminalDockProps) {
     activeId.current = id
     setRunningId(id)
     try {
-      await terminalApi.run({ id, cwd: currentCwd, command: value })
+      await terminalApi.run({ id, sessionId, cwd: currentCwd, command: value })
     } catch (reason) {
       activeId.current = undefined
       setRunningId(undefined)
@@ -119,7 +125,11 @@ export function TerminalDock({ cwd, onClose }: TerminalDockProps) {
   }
 
   const stop = (): void => {
-    if (runningId !== undefined) void terminalApi.stop(runningId)
+    if (runningId !== undefined) {
+      void terminalApi.stop(runningId).catch(reason => {
+        setChunks(current => appendChunk(current, { id: `${runningId}-stop-error`, tone: 'stderr', text: errorText(reason) }))
+      })
+    }
   }
 
   return (
@@ -141,7 +151,7 @@ export function TerminalDock({ cwd, onClose }: TerminalDockProps) {
         <input
           ref={input}
           value={command}
-          disabled={currentCwd === undefined}
+          disabled={currentCwd === undefined || sessionId === undefined}
           aria-label="Terminal command"
           autoComplete="off"
           spellCheck={false}
@@ -161,7 +171,7 @@ export function TerminalDock({ cwd, onClose }: TerminalDockProps) {
             setCommand(nextIndex < 0 ? '' : history[nextIndex] ?? '')
           }}
         />
-        <button type="submit" disabled={command.trim() === '' || runningId !== undefined || currentCwd === undefined}>Run</button>
+        <button type="submit" disabled={command.trim() === '' || runningId !== undefined || currentCwd === undefined || sessionId === undefined}>Run</button>
       </form>
     </section>
   )

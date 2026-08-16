@@ -34,7 +34,7 @@ contextBridge.exposeInMainWorld('dshDesktop', {
   antigravityInterrupt: (conversationId: string, turnId: string) => ipcRenderer.invoke('dsh:antigravity-interrupt', conversationId, turnId),
   terminalRun: (input: unknown) => ipcRenderer.invoke('dsh:terminal-run', input),
   terminalStop: (id: string) => ipcRenderer.invoke('dsh:terminal-stop', id),
-  terminalChangeDirectory: (cwd: string, target: string) => ipcRenderer.invoke('dsh:terminal-change-directory', cwd, target),
+  terminalChangeDirectory: (sessionId: string, cwd: string, target: string) => ipcRenderer.invoke('dsh:terminal-change-directory', sessionId, cwd, target),
   setupInspect: () => ipcRenderer.invoke('dsh:setup-inspect'),
   setupStartHost: () => ipcRenderer.invoke('dsh:setup-start-host'),
   setupStopHost: () => ipcRenderer.invoke('dsh:setup-stop-host'),

@@ -174,7 +174,7 @@ export const harnessApi = {
     document.body.append(anchor)
     anchor.click()
     anchor.remove()
-    URL.revokeObjectURL(url)
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000)
     return { canceled: false, filename }
   },
   updateQueue: (sessionId: string, itemId: string, action: { kind: 'remove' | 'steer' } | { kind: 'edit'; content: PromptContentPart[] }) =>
@@ -435,7 +435,7 @@ export function subscribeAntigravity(onEvent: (event: AntigravityEvent) => void)
 }
 
 export const terminalApi = {
-  run: (input: { id: string; cwd: string; command: string }): Promise<{ accepted: true }> => {
+  run: (input: { id: string; sessionId: string; cwd: string; command: string }): Promise<{ accepted: true }> => {
     if (window.dshDesktop === undefined) return Promise.reject(new Error('Terminal requires the desktop app'))
     return window.dshDesktop.terminalRun(input)
   },
@@ -443,9 +443,9 @@ export const terminalApi = {
     if (window.dshDesktop === undefined) return Promise.reject(new Error('Terminal requires the desktop app'))
     return window.dshDesktop.terminalStop(id)
   },
-  changeDirectory: (cwd: string, target: string): Promise<string> => {
+  changeDirectory: (sessionId: string, cwd: string, target: string): Promise<string> => {
     if (window.dshDesktop === undefined) return Promise.reject(new Error('Terminal requires the desktop app'))
-    return window.dshDesktop.terminalChangeDirectory(cwd, target)
+    return window.dshDesktop.terminalChangeDirectory(sessionId, cwd, target)
   },
 }
 

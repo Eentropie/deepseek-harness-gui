@@ -95,6 +95,8 @@ function turnError(params: Record<string, unknown>): string | undefined {
   return string(error?.['message']) ?? string(error?.['additionalDetails'])
 }
 
+const MAX_PROTOCOL_BUFFER_BYTES = 16 * 1024 * 1024
+
 /** A single authenticated Codex App Server process owned by the desktop main process. */
 export class CodexAppServer {
   private process?: ChildProcessWithoutNullStreams
@@ -106,6 +108,7 @@ export class CodexAppServer {
   private readonly loadedThreads = new Set<string>()
   private readonly webModeByThread = new Map<string, string>()
   private readonly sessionByThread = new Map<string, string>()
+  private readonly activeTurnsByThread = new Map<string, { sessionId?: string; turnId: string }>()
   private readonly incomingApprovals = new Map<string | number, string>()
   private catalogCache?: CodexCatalogModel[]
   private usageCache?: CodexUsageSnapshot
@@ -262,6 +265,7 @@ export class CodexAppServer {
     }, 60_000))
     const turnId = string(record(response?.['turn'])?.['id'])
     if (turnId === undefined) throw new Error('Codex did not return a turn id')
+    this.activeTurnsByThread.set(threadId, { sessionId: input.sessionId, turnId })
     return { threadId, turnId }
   }
 
@@ -288,6 +292,10 @@ export class CodexAppServer {
     }, 60_000))
     const steeredTurnId = string(response?.['turnId'])
     if (steeredTurnId === undefined) throw new Error('Codex did not confirm the steered turn')
+    this.activeTurnsByThread.set(threadId, {
+      ...(this.sessionByThread.get(threadId) === undefined ? {} : { sessionId: this.sessionByThread.get(threadId) }),
+      turnId: steeredTurnId,
+    })
     return { turnId: steeredTurnId }
   }
 
@@ -310,6 +318,7 @@ export class CodexAppServer {
     this.startPromise = undefined
     this.loadedThreads.clear()
     this.webModeByThread.clear()
+    this.activeTurnsByThread.clear()
     for (const requestId of this.incomingApprovals.keys()) this.respond(requestId, { decision: 'decline' })
     this.incomingApprovals.clear()
     this.rejectPending(new Error('Codex App Server stopped'))
@@ -352,14 +361,22 @@ export class CodexAppServer {
       this.handleExit(new Error(`Codex App Server exited (${signal ?? code ?? 'unknown'})${suffix}`))
     })
 
-    await this.rawRequest('initialize', {
-      clientInfo: {
-        name: 'deepseek_workbench',
-        title: 'DeepSeek Harness',
-        version: '0.1.0',
-      },
-    }, 30_000)
-    this.notify('initialized', {})
+    try {
+      await this.rawRequest('initialize', {
+        clientInfo: {
+          name: 'deepseek_workbench',
+          title: 'DeepSeek Harness',
+          version: '0.1.0',
+        },
+      }, 30_000)
+      this.notify('initialized', {})
+    } catch (reason) {
+      if (this.process === child) {
+        this.stderr = errorMessage(reason)
+        this.terminateProcess(child)
+      }
+      throw reason
+    }
   }
 
   private async loadCatalog(): Promise<CodexCatalogModel[]> {
@@ -418,6 +435,12 @@ export class CodexAppServer {
 
   private consume(chunk: string): void {
     this.stdout += chunk
+    if (Buffer.byteLength(this.stdout, 'utf8') > MAX_PROTOCOL_BUFFER_BYTES) {
+      this.stdout = ''
+      this.stderr = 'Codex App Server exceeded the 16 MB protocol line limit'
+      if (this.process !== undefined) this.terminateProcess(this.process)
+      return
+    }
     for (;;) {
       const newline = this.stdout.indexOf('\n')
       if (newline < 0) return
@@ -519,6 +542,10 @@ export class CodexAppServer {
       return
     }
     if (method === 'turn/started' && threadId !== undefined && turnId !== undefined) {
+      this.activeTurnsByThread.set(threadId, {
+        ...(sessionId === undefined ? {} : { sessionId }),
+        turnId,
+      })
       this.publish({ type: 'turn-started', ...(sessionId === undefined ? {} : { sessionId }), threadId, turnId })
       return
     }
@@ -538,6 +565,7 @@ export class CodexAppServer {
       return
     }
     if (method === 'turn/completed' && threadId !== undefined && turnId !== undefined) {
+      this.activeTurnsByThread.delete(threadId)
       const rawStatus = string(turn?.['status'])
       const status = rawStatus === 'interrupted' || rawStatus === 'failed' ? rawStatus : 'completed'
       const error = turnError(params)
@@ -553,6 +581,7 @@ export class CodexAppServer {
     }
     if (method === 'error') {
       const error = record(params['error'])
+      if (threadId !== undefined && turnId !== undefined) this.activeTurnsByThread.delete(threadId)
       this.publish({
         type: 'error',
         ...(sessionId === undefined ? {} : { sessionId }),
@@ -567,12 +596,32 @@ export class CodexAppServer {
     if (this.process === undefined) return
     this.process = undefined
     this.startPromise = undefined
+    const activeTurns = [...this.activeTurnsByThread.entries()]
+    this.activeTurnsByThread.clear()
+    for (const [threadId, turn] of activeTurns) {
+      this.publish({
+        type: 'turn-completed',
+        ...(turn.sessionId === undefined ? {} : { sessionId: turn.sessionId }),
+        threadId,
+        turnId: turn.turnId,
+        status: 'failed',
+        error: reason.message,
+      })
+    }
     this.loadedThreads.clear()
     this.webModeByThread.clear()
     this.catalogCache = undefined
     this.incomingApprovals.clear()
     this.rejectPending(reason)
     if (!this.stopping) this.publish({ type: 'error', message: reason.message })
+  }
+
+  private terminateProcess(child: ChildProcessWithoutNullStreams): void {
+    child.kill('SIGTERM')
+    const timer = setTimeout(() => {
+      if (this.process === child) child.kill('SIGKILL')
+    }, 2_000)
+    timer.unref()
   }
 
   private rejectPending(reason: Error): void {

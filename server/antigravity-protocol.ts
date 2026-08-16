@@ -6,19 +6,27 @@ function effortName(value: string): string {
   return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`
 }
 
-function parsedVariant(id: string, name: string): { baseId: string; baseName: string; effort: string } {
+function parsedVariant(id: string, name: string): { baseId: string; baseName: string; effort: string; usesEffortFlag: boolean } {
   const match = id.match(/-(low|medium|high)$/)
-  if (match === null) return { baseId: id, baseName: name.replace(/\s*\(Thinking\)\s*$/i, ''), effort: 'high' }
+  if (match === null) {
+    return {
+      baseId: id,
+      baseName: name.replace(/\s*\(Thinking\)\s*$/i, ''),
+      effort: /\(Thinking\)\s*$/i.test(name) ? 'thinking' : 'default',
+      usesEffortFlag: false,
+    }
+  }
   return {
     baseId: id.slice(0, -match[0].length),
     baseName: name.replace(/\s*\((?:Low|Medium|High)\)\s*$/i, ''),
     effort: match[1] ?? 'medium',
+    usesEffortFlag: true,
   }
 }
 
 /** Collapse AGY's effort-specific model IDs into one model with hot-swappable efforts. */
 export function parseAntigravityModels(output: string): AntigravityCatalogModel[] {
-  const groups = new Map<string, { name: string; variants: Array<{ effort: string; model: string }> }>()
+  const groups = new Map<string, { name: string; variants: Array<{ effort: string; model: string; usesEffortFlag: boolean }> }>()
   output.split(/\r?\n/).forEach(line => {
     const [rawId, ...nameParts] = line.trim().split('\t')
     const id = rawId?.trim()
@@ -26,7 +34,9 @@ export function parseAntigravityModels(output: string): AntigravityCatalogModel[
     if (id === undefined || id === '' || name === '') return
     const variant = parsedVariant(id, name)
     const current = groups.get(variant.baseId) ?? { name: variant.baseName, variants: [] }
-    if (!current.variants.some(item => item.model === id)) current.variants.push({ effort: variant.effort, model: id })
+    if (!current.variants.some(item => item.model === id)) {
+      current.variants.push({ effort: variant.effort, model: id, usesEffortFlag: variant.usesEffortFlag })
+    }
     groups.set(variant.baseId, current)
   })
 
@@ -49,6 +59,10 @@ export function parseAntigravityModels(output: string): AntigravityCatalogModel[
 
 export function antigravityVariant(model: AntigravityCatalogModel, effort: string): string | undefined {
   return model.variants.find(item => item.effort === effort)?.model
+}
+
+export function antigravityUsesEffortFlag(model: AntigravityCatalogModel, effort: string): boolean {
+  return model.variants.find(item => item.effort === effort)?.usesEffortFlag === true
 }
 
 export function antigravityNetworkInstruction(network: 'off' | 'auto'): string {

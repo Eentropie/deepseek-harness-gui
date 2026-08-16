@@ -21,7 +21,7 @@ import { joinTurnBlocks } from '../src/lib/thought-process.ts'
 import { desktopAgentRoomCapability } from '../src/lib/agent-room-protocol.ts'
 import { providerHandoffText } from '../src/lib/provider-handoff.ts'
 import { antigravityExecutableCandidates, type AntigravityExecutableCandidate } from '../server/antigravity-executable.ts'
-import { antigravityNetworkInstruction, antigravityVariant, parseAntigravityModels } from '../server/antigravity-protocol.ts'
+import { antigravityNetworkInstruction, antigravityUsesEffortFlag, antigravityVariant, parseAntigravityModels } from '../server/antigravity-protocol.ts'
 import { codexSpawnEnvironment } from '../server/codex-launch.ts'
 
 interface AntigravityPromptInput {
@@ -47,6 +47,7 @@ interface ActiveTurn {
   thoughts: ProcessBlock[]
   tools: Map<string, Extract<ProcessBlock, { kind: 'tool' }>>
   resultSeen: boolean
+  initialized: boolean
   settled: boolean
   resolve: (value: AntigravityPromptResult) => void
   reject: (reason: Error) => void
@@ -60,6 +61,8 @@ interface PersistedThreads {
   version: 1
   conversations: Record<string, ConversationMessage[]>
 }
+
+const MAX_PROTOCOL_BUFFER_BYTES = 16 * 1024 * 1024
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null ? value as Record<string, unknown> : undefined
@@ -90,6 +93,17 @@ function toolStatus(state: string | undefined): ToolStatus {
   if (state === 'ACTIVE' || state === 'PENDING') return 'running'
   if (state === 'ERROR' || state === 'FAILED' || state === 'CANCELLED') return 'failed'
   return 'succeeded'
+}
+
+function processBlockHasContent(block: ProcessBlock): boolean {
+  if (block.kind === 'text' || block.kind === 'reasoning') return block.text.trim() !== ''
+  return true
+}
+
+function messageHasContent(message: ConversationMessage): boolean {
+  return message.blocks.some(block => block.kind === 'thought'
+    ? block.blocks.some(processBlockHasContent)
+    : processBlockHasContent(block))
 }
 
 async function executable(): Promise<AntigravityExecutableCandidate> {
@@ -216,7 +230,7 @@ export class AntigravityCli {
       throw new Error('Antigravity CLI bridge is shutting down')
     }
     const turnId = randomUUID()
-    const args = this.promptArguments(input, variant, model.name)
+    const args = this.promptArguments(input, variant, model.name, antigravityUsesEffortFlag(model, input.effort))
     let child: ChildProcessWithoutNullStreams
     try {
       child = spawn(candidate.path, args, {
@@ -244,13 +258,14 @@ export class AntigravityCli {
         thoughts: [],
         tools: new Map(),
         resultSeen: false,
+        initialized: false,
         settled: false,
         resolve,
         reject,
         initTimer: setTimeout(() => {
           if (turn.settled) return
           turn.settled = true
-          child.kill('SIGTERM')
+          this.terminateTurn(turn)
           reject(new Error('Antigravity CLI did not initialize its event stream'))
         }, 45_000),
         stdout: '',
@@ -268,18 +283,18 @@ export class AntigravityCli {
   async readThread(conversationId: string): Promise<AntigravityThreadSnapshot> {
     if (!/^[a-zA-Z0-9._-]{1,200}$/.test(conversationId)) throw new Error('Antigravity conversation id is invalid')
     await this.ensureLoaded()
-    return { conversationId, messages: this.messagesByConversation.get(conversationId) ?? [] }
+    return { conversationId, messages: (this.messagesByConversation.get(conversationId) ?? []).filter(messageHasContent) }
   }
 
   interrupt(conversationId: string, turnId: string): void {
     const turn = this.activeByTurn.get(turnId)
     if (turn === undefined || turn.conversationId !== conversationId) throw new Error('Antigravity turn is no longer running')
-    turn.process.kill('SIGTERM')
+    this.terminateTurn(turn)
   }
 
   shutdown(): void {
     this.shuttingDown = true
-    for (const turn of this.activeByTurn.values()) turn.process.kill('SIGTERM')
+    for (const turn of this.activeByTurn.values()) this.terminateTurn(turn)
   }
 
   private async reserveTurnSlot(): Promise<() => void> {
@@ -295,7 +310,7 @@ export class AntigravityCli {
     }
   }
 
-  private promptArguments(input: AntigravityPromptInput, variant: string, modelName: string): string[] {
+  private promptArguments(input: AntigravityPromptInput, variant: string, modelName: string, usesEffortFlag: boolean): string[] {
     const handoff = input.context === undefined || input.context.length === 0
       ? ''
       : providerHandoffText('DeepSeek Harness', { messages: input.context, omitted: 0 })
@@ -310,9 +325,9 @@ export class AntigravityCli {
       '--print', prompt,
       '--output-format', 'stream-json',
       '--model', variant,
-      '--effort', input.effort,
       '--print-timeout', '30m',
     ]
+    if (usesEffortFlag) args.push('--effort', input.effort)
     if (input.permission === 'read-only') args.push('--mode', 'plan', '--sandbox')
     if (input.permission === 'workspace-write') args.push('--mode', 'accept-edits', '--sandbox', '--dangerously-skip-permissions')
     if (input.permission === 'full-access') args.push('--mode', 'accept-edits', '--dangerously-skip-permissions')
@@ -321,6 +336,12 @@ export class AntigravityCli {
 
   private consume(turn: ActiveTurn, chunk: string): void {
     turn.stdout += chunk
+    if (Buffer.byteLength(turn.stdout, 'utf8') > MAX_PROTOCOL_BUFFER_BYTES) {
+      turn.stdout = ''
+      turn.stderr = 'Antigravity CLI exceeded the 16 MB protocol line limit'
+      this.terminateTurn(turn)
+      return
+    }
     for (;;) {
       const newline = turn.stdout.indexOf('\n')
       if (newline < 0) return
@@ -342,6 +363,7 @@ export class AntigravityCli {
       const conversationId = string(envelope?.['conversation_id']) ?? string(record(envelope?.['init'])?.['conversation_id'])
       if (conversationId === undefined) throw new Error('Antigravity init event has no conversation id')
       turn.conversationId = conversationId
+      turn.initialized = true
       this.appendUser(turn)
       this.publish({ type: 'turn-started', sessionId: turn.sessionId, threadId: conversationId, turnId: turn.turnId })
       if (!turn.settled) {
@@ -359,7 +381,7 @@ export class AntigravityCli {
   }
 
   private onStep(turn: ActiveTurn, step: Record<string, unknown> | undefined): void {
-    if (step === undefined || turn.conversationId === undefined) return
+    if (step === undefined || !turn.initialized || turn.conversationId === undefined) return
     const stepType = string(step['step_type']) ?? 'unknown'
     const stepIndex = number(step['step_index']) ?? 0
     const delta = string(step['text_delta'])
@@ -404,6 +426,15 @@ export class AntigravityCli {
   }
 
   private onResult(turn: ActiveTurn, result: Record<string, unknown> | undefined): void {
+    if (!turn.initialized) {
+      turn.resultSeen = true
+      if (!turn.settled) {
+        clearTimeout(turn.initTimer)
+        turn.settled = true
+        turn.reject(new Error(string(result?.['error']) ?? 'Antigravity CLI failed before initialization'))
+      }
+      return
+    }
     if (turn.conversationId === undefined) return
     turn.resultSeen = true
     const response = string(result?.['response']) ?? ''
@@ -444,7 +475,10 @@ export class AntigravityCli {
     if (conversationId === undefined) return
     const messages = [...(this.messagesByConversation.get(conversationId) ?? [])]
     if (messages.some(message => message.id === `agy-turn-${turn.turnId}`)) return
-    const thought = [...turn.thoughts, ...turn.tools.values()]
+    const thought = [...turn.thoughts, ...turn.tools.values()].filter(processBlockHasContent)
+    const answer = turn.answer.trim() === '' ? [] : [{ kind: 'text' as const, text: turn.answer }]
+    const blocks = joinTurnBlocks(thought, answer)
+    if (blocks.length === 0) return
     messages.push({
       id: `agy-turn-${turn.turnId}`,
       seq: (messages.at(-1)?.seq ?? 0) + 1,
@@ -452,7 +486,7 @@ export class AntigravityCli {
       role: 'assistant',
       agent: 'Antigravity',
       modelName: turn.modelName,
-      blocks: joinTurnBlocks(thought, turn.answer === '' ? [] : [{ kind: 'text', text: turn.answer }]),
+      blocks,
       streaming: false,
     })
     this.messagesByConversation.set(conversationId, messages)
@@ -461,8 +495,7 @@ export class AntigravityCli {
 
   private finishProcess(turn: ActiveTurn, code: number | null, signal: NodeJS.Signals | null): void {
     clearTimeout(turn.initTimer)
-    this.activeByTurn.delete(turn.turnId)
-    turn.releaseSlot()
+    if (!this.claimTurn(turn)) return
     if (!turn.settled) {
       turn.settled = true
       turn.reject(new Error(turn.stderr.trim() || turn.stdout.trim() || `Antigravity CLI exited before initialization (${signal ?? code ?? 'unknown'})`))
@@ -485,14 +518,39 @@ export class AntigravityCli {
 
   private failTurn(turn: ActiveTurn, reason: unknown): void {
     clearTimeout(turn.initTimer)
-    this.activeByTurn.delete(turn.turnId)
-    turn.releaseSlot()
+    if (!this.claimTurn(turn)) return
     if (!turn.settled) {
       turn.settled = true
       turn.reject(reason instanceof Error ? reason : new Error(errorMessage(reason)))
       return
     }
-    this.publish({ type: 'error', sessionId: turn.sessionId, ...(turn.conversationId === undefined ? {} : { threadId: turn.conversationId }), turnId: turn.turnId, message: errorMessage(reason) })
+    if (!turn.initialized) return
+    this.commitAssistant(turn)
+    if (turn.conversationId !== undefined) {
+      this.publish({
+        type: 'turn-completed',
+        sessionId: turn.sessionId,
+        threadId: turn.conversationId,
+        turnId: turn.turnId,
+        status: 'failed',
+        error: errorMessage(reason),
+      })
+    }
+  }
+
+  private claimTurn(turn: ActiveTurn): boolean {
+    if (this.activeByTurn.get(turn.turnId) !== turn) return false
+    this.activeByTurn.delete(turn.turnId)
+    turn.releaseSlot()
+    return true
+  }
+
+  private terminateTurn(turn: ActiveTurn): void {
+    turn.process.kill('SIGTERM')
+    const timer = setTimeout(() => {
+      if (this.activeByTurn.get(turn.turnId) === turn) turn.process.kill('SIGKILL')
+    }, 2_000)
+    timer.unref()
   }
 
   private ensureLoaded(): Promise<void> {
@@ -500,7 +558,10 @@ export class AntigravityCli {
       const parsed = JSON.parse(text) as PersistedThreads
       if (parsed.version !== 1 || typeof parsed.conversations !== 'object') return
       Object.entries(parsed.conversations).forEach(([id, messages]) => {
-        if (Array.isArray(messages)) this.messagesByConversation.set(id, messages)
+        if (!Array.isArray(messages)) return
+        const populated = messages.filter(messageHasContent)
+        this.messagesByConversation.set(id, populated)
+        if (populated.length !== messages.length) queueMicrotask(() => this.persist())
       })
     }).catch(() => undefined)
     return this.loaded

@@ -19,11 +19,11 @@ describe('ProviderLogo', () => {
     expect(markup).not.toContain('<img')
   })
 
-  it('uses the original vendor silhouette with monochrome Harness styling', () => {
+  it('uses the Claude mark for Claude and Anthropic routes with monochrome Harness styling', () => {
     const markup = renderToStaticMarkup(<ProviderLogo provider="anthropic" />)
-    expect(markup).toContain('data-provider-logo="anthropic"')
+    expect(markup).toContain('data-provider-logo="claude"')
     expect(markup).toContain('data-brand-shape="official"')
-    expect(markup).toContain('<title>Anthropic</title>')
+    expect(markup).toContain('<title>Claude</title>')
     expect(markup).toContain('fill="currentColor"')
   })
 

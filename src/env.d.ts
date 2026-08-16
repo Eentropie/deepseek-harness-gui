@@ -79,9 +79,9 @@ interface DeepSeekDesktopBridge {
   }) => Promise<AntigravityPromptResult>
   antigravityReadThread: (conversationId: string) => Promise<AntigravityThreadSnapshot>
   antigravityInterrupt: (conversationId: string, turnId: string) => Promise<void>
-  terminalRun: (input: { id: string; cwd: string; command: string }) => Promise<{ accepted: true }>
+  terminalRun: (input: { id: string; sessionId: string; cwd: string; command: string }) => Promise<{ accepted: true }>
   terminalStop: (id: string) => Promise<void>
-  terminalChangeDirectory: (cwd: string, target: string) => Promise<string>
+  terminalChangeDirectory: (sessionId: string, cwd: string, target: string) => Promise<string>
   setupInspect: () => Promise<SetupSnapshot>
   setupStartHost: () => Promise<SetupSnapshot>
   setupStopHost: () => Promise<void>

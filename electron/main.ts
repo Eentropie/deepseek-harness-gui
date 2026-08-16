@@ -20,8 +20,9 @@ import { PluginController, resolveHostOrigin } from '../server/plugin-control.ts
 import { CodexAppServer } from './codex-app-server.ts'
 import { AntigravityCli } from './antigravity-cli.ts'
 import { DeepSeekBillingService } from './deepseek-billing.ts'
-import { assertDesktopRpcPayload } from './rpc-policy.ts'
+import { assertDesktopRpcPayload, DESKTOP_RPC_METHODS } from './rpc-policy.ts'
 import { SetupService } from './setup-service.ts'
+import { pathBelongsToRoot, sanitizedTerminalEnvironment } from '../server/terminal-policy.ts'
 import type { AgentWorkspaceResult, ProviderHandoffMessage, ReviewDirectorySnapshot, ReviewDocument, ReviewSnapshot } from '../src/lib/types.ts'
 
 type ConnectionState = 'connecting' | 'connected' | 'reconnecting'
@@ -49,57 +50,7 @@ const APP_NAME = 'DeepSeek Harness'
 // The OS-level executable name is supplied by the branded package launcher.
 app.setName(APP_NAME)
 process.title = APP_NAME
-const ALLOWED_RPC_METHODS = new Set([
-  'host.describe',
-  'host.openPath',
-  'session.list',
-  'session.search',
-  'workspace.list',
-  'workspace.create',
-  'workspace.rename',
-  'workspace.insertBefore',
-  'workspace.insertSessionBefore',
-  'workspace.delete',
-  'workspace.archiveSession',
-  'session.history',
-  'session.attachment',
-  'session.updateQueue',
-  'session.rename',
-  'session.fork',
-  'session.models',
-  'session.create',
-  'session.prompt',
-  'session.cancel',
-  'session.selectModel',
-  'subagent.list',
-  'subagent.history',
-  'subagent.prompt',
-  'subagent.interrupt',
-  'skill.list',
-  'goal.create',
-  'goal.edit',
-  'goal.pause',
-  'goal.resume',
-  'goal.complete',
-  'goal.clear',
-  'agentPreset.list',
-  'agentPreset.select',
-  'agentPreset.read',
-  'agentPreset.copy',
-  'agentPreset.openDocument',
-  'agentPreset.remove',
-  'settings.describe',
-  'settings.update',
-  'settings.replace',
-  'settings.mutate',
-  'settings.openDocument',
-  'credentials.describe',
-  'credentials.set',
-  'credentials.unset',
-  'llm.providers',
-  'llm.models',
-  'llm.discoverModels',
-])
+const ALLOWED_RPC_METHODS = new Set<string>(DESKTOP_RPC_METHODS)
 
 const MIME_TYPES = new Map([
   ['.css', 'text/css; charset=utf-8'],
@@ -447,6 +398,53 @@ async function assertCodexWorkspace(sessionId: string, cwd: string): Promise<voi
   throw new Error('Codex working directory is not owned by the selected Harness session')
 }
 
+async function terminalWorkspaceDirectory(sessionId: string, path: string): Promise<string> {
+  const canonical = await canonicalTerminalDirectory(path)
+  const agentRoom = agentRoomIdentity(sessionId)
+  const sidechatRemainder = sessionId.startsWith('sidechat:') ? sessionId.slice('sidechat:'.length) : undefined
+  const ownerSessionId = agentRoom?.parentSessionId
+    ?? (sidechatRemainder === undefined ? sessionId : sidechatRemainder.split(':', 1)[0] ?? sidechatRemainder)
+  const [sessionPage, workspacePage] = await Promise.all([
+    hostRpc<{ items: Array<{ sessionId: string; cwd?: string }> }>('session.list', {}),
+    hostRpc<{ items: Array<{ path: string; sessionIds: string[] }> }>('workspace.list', {}),
+  ])
+  const session = sessionPage.items.find(candidate => candidate.sessionId === ownerSessionId)
+  if (session === undefined) throw new Error('Terminal session is not present in the local Harness Host')
+  const roots = new Set<string>()
+  if (session.cwd !== undefined) roots.add(session.cwd)
+  workspacePage.items.forEach(workspace => {
+    if (workspace.sessionIds.includes(ownerSessionId)) roots.add(workspace.path)
+  })
+  for (const root of roots) {
+    const canonicalRoot = await realpath(root).catch(() => undefined)
+    if (canonicalRoot !== undefined && pathBelongsToRoot(canonicalRoot, canonical)) return canonical
+    if (agentRoom === undefined) continue
+    const worktree = await agentWorktreePath(root, agentRoom.agentId).catch(() => undefined)
+    if (worktree === undefined) continue
+    const canonicalWorktree = await realpath(worktree).catch(() => undefined)
+    if (canonicalWorktree !== undefined && pathBelongsToRoot(canonicalWorktree, canonical)) return canonical
+  }
+  throw new Error('Terminal working directory must remain inside the selected Harness workspace')
+}
+
+async function assertDesktopOpenPath(payload: unknown): Promise<void> {
+  const input = object(payload)
+  const target = await realpath(requiredString(input['path'], 'open path'))
+  const [sessionPage, workspacePage] = await Promise.all([
+    hostRpc<{ items: Array<{ cwd?: string }> }>('session.list', {}),
+    hostRpc<{ items: Array<{ path: string }> }>('workspace.list', {}),
+  ])
+  const roots = new Set([
+    ...sessionPage.items.flatMap(item => item.cwd === undefined ? [] : [item.cwd]),
+    ...workspacePage.items.map(item => item.path),
+  ])
+  for (const root of roots) {
+    const canonicalRoot = await realpath(root).catch(() => undefined)
+    if (canonicalRoot !== undefined && pathBelongsToRoot(canonicalRoot, target)) return
+  }
+  throw new Error('Open path must belong to a Harness workspace')
+}
+
 async function canonicalTerminalDirectory(path: string): Promise<string> {
   if (!isAbsolute(path) || path.length > 4_096) throw new Error('Terminal working directory must be an absolute path')
   const canonical = await realpath(path)
@@ -454,15 +452,15 @@ async function canonicalTerminalDirectory(path: string): Promise<string> {
   return canonical
 }
 
-async function changeTerminalDirectory(cwd: string, rawTarget: string): Promise<string> {
-  const base = await canonicalTerminalDirectory(cwd)
+async function changeTerminalDirectory(sessionId: string, cwd: string, rawTarget: string): Promise<string> {
+  const base = await terminalWorkspaceDirectory(sessionId, cwd)
   const unquoted = rawTarget.trim().replace(/^(['"])([\s\S]*)\1$/, '$2')
   const homeRelative = unquoted === '~'
     ? homedir()
     : /^~[\\/]/.test(unquoted)
       ? join(homedir(), unquoted.slice(2))
       : unquoted
-  return canonicalTerminalDirectory(homeRelative === '' ? homedir() : resolve(base, homeRelative))
+  return terminalWorkspaceDirectory(sessionId, homeRelative === '' ? homedir() : resolve(base, homeRelative))
 }
 
 function terminalInvocation(command: string): { executable: string; args: string[] } {
@@ -678,6 +676,7 @@ function installIpc(
   ipcMain.handle('dsh:rpc', async (event, method: unknown, payload: unknown) => {
     assertTrustedSender(event)
     if (typeof method !== 'string') throw new Error('RPC method must be a string')
+    if (method === 'host.openPath') await assertDesktopOpenPath(payload)
     return hostRpc(method, payload)
   })
   ipcMain.handle('dsh:respond', async (event, rpcId: unknown, result: unknown) => {
@@ -981,13 +980,14 @@ function installIpc(
     assertTrustedSender(event)
     const payload = object(raw)
     const id = requiredString(payload['id'], 'terminal command id')
+    const sessionId = requiredString(payload['sessionId'], 'terminal session id')
     const command = requiredString(payload['command'], 'terminal command')
-    const cwd = await canonicalTerminalDirectory(requiredString(payload['cwd'], 'terminal working directory'))
+    const cwd = await terminalWorkspaceDirectory(sessionId, requiredString(payload['cwd'], 'terminal working directory'))
     if (id.length > 128 || command.length > 20_000 || terminalProcesses.has(id)) throw new Error('Terminal command payload is invalid')
     const invocation = terminalInvocation(command)
     const child = spawn(invocation.executable, invocation.args, {
       cwd,
-      env: { ...process.env, TERM: 'dumb', NO_COLOR: '1' },
+      env: { ...sanitizedTerminalEnvironment(process.env), TERM: 'dumb', NO_COLOR: '1' },
       windowsHide: true,
     })
     terminalProcesses.set(id, { owner: event.sender.id, child })
@@ -1010,10 +1010,14 @@ function installIpc(
     if (processRecord === undefined || processRecord.owner !== event.sender.id) return
     processRecord.child.kill('SIGTERM')
   })
-  ipcMain.handle('dsh:terminal-change-directory', async (event, rawCwd: unknown, rawTarget: unknown) => {
+  ipcMain.handle('dsh:terminal-change-directory', async (event, rawSessionId: unknown, rawCwd: unknown, rawTarget: unknown) => {
     assertTrustedSender(event)
     if (typeof rawTarget !== 'string' || rawTarget.length > 4_096) throw new Error('Terminal directory target is invalid')
-    return changeTerminalDirectory(requiredString(rawCwd, 'terminal working directory'), rawTarget)
+    return changeTerminalDirectory(
+      requiredString(rawSessionId, 'terminal session id'),
+      requiredString(rawCwd, 'terminal working directory'),
+      rawTarget,
+    )
   })
 }
 

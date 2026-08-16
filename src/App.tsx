@@ -213,8 +213,13 @@ function readCodexSession(sessionId: string): CodexSessionState {
   }
 }
 
-function writeCodexSession(sessionId: string, state: CodexSessionState): void {
-  localStorage.setItem(codexSessionKey(sessionId), JSON.stringify(state))
+function writeCodexSession(sessionId: string, state: CodexSessionState): boolean {
+  try {
+    localStorage.setItem(codexSessionKey(sessionId), JSON.stringify(state))
+    return true
+  } catch {
+    return false
+  }
 }
 
 function antigravitySessionKey(sessionId: string): string {
@@ -242,8 +247,13 @@ function readAntigravitySession(sessionId: string): AntigravitySessionState {
   }
 }
 
-function writeAntigravitySession(sessionId: string, state: AntigravitySessionState): void {
-  localStorage.setItem(antigravitySessionKey(sessionId), JSON.stringify(state))
+function writeAntigravitySession(sessionId: string, state: AntigravitySessionState): boolean {
+  try {
+    localStorage.setItem(antigravitySessionKey(sessionId), JSON.stringify(state))
+    return true
+  } catch {
+    return false
+  }
 }
 
 function readSidechatSelection(sessionId: string): SidechatSelection | undefined {
@@ -1116,13 +1126,13 @@ export function App() {
         codexTurnIdRef.current = undefined
         setCodexRunning(false)
         setCodexTurnId(undefined)
-        setActionError(`Codex 排队消息发送失败：${errorText(reason)}`)
+        setActionError(tr(`Codex queued message failed: ${errorText(reason)}`, `Codex 排队消息发送失败：${errorText(reason)}`))
       }
       return false
     } finally {
       codexDrainInFlight.current.delete(sessionId)
     }
-  }, [updateCodexQueues])
+  }, [tr, updateCodexQueues])
 
   const flushAntigravityDeltas = useCallback((): void => {
     if (antigravityDeltaTimer.current !== undefined) window.clearTimeout(antigravityDeltaTimer.current)
@@ -1191,13 +1201,13 @@ export function App() {
         antigravityTurnIdRef.current = undefined
         setAntigravityRunning(false)
         setAntigravityTurnId(undefined)
-        setActionError(`Antigravity 排队消息发送失败：${errorText(reason)}`)
+        setActionError(tr(`Antigravity queued message failed: ${errorText(reason)}`, `Antigravity 排队消息发送失败：${errorText(reason)}`))
       }
       return false
     } finally {
       antigravityDrainInFlight.current.delete(sessionId)
     }
-  }, [updateAntigravityQueues])
+  }, [tr, updateAntigravityQueues])
 
   useEffect(() => () => {
     if (codexDeltaTimer.current !== undefined) window.clearTimeout(codexDeltaTimer.current)
@@ -1228,10 +1238,10 @@ export function App() {
         setCodexMessages(snapshot.messages)
       }
     }).catch(reason => {
-      if (active && state.active) setActionError(`Codex 线程读取失败：${errorText(reason)}`)
+      if (active && state.active) setActionError(tr(`Failed to read Codex thread: ${errorText(reason)}`, `Codex 线程读取失败：${errorText(reason)}`))
     })
     return () => { active = false }
-  }, [pendingSession?.key, selectedId])
+  }, [pendingSession?.key, selectedId, tr])
 
   useEffect(() => {
     if (antigravityDeltaTimer.current !== undefined) window.clearTimeout(antigravityDeltaTimer.current)
@@ -1255,10 +1265,10 @@ export function App() {
     void antigravityApi.readThread(state.conversationId).then(snapshot => {
       if (active && selectedRef.current === selectedId) setAntigravityMessages(snapshot.messages)
     }).catch(reason => {
-      if (active && state.active) setActionError(`Antigravity 会话读取失败：${errorText(reason)}`)
+      if (active && state.active) setActionError(tr(`Failed to read Antigravity session: ${errorText(reason)}`, `Antigravity 会话读取失败：${errorText(reason)}`))
     })
     return () => { active = false }
-  }, [pendingSession?.key, selectedId])
+  }, [pendingSession?.key, selectedId, tr])
 
   useEffect(() => {
     const generation = ++sidechatGeneration.current
@@ -1384,7 +1394,7 @@ export function App() {
         codexTurnIdRef.current = undefined
         flushCodexDeltas()
         setCodexTurnId(undefined)
-        if (event.status === 'failed') setActionError(`Codex 运行失败：${event.error ?? 'Unknown error'}`)
+        if (event.status === 'failed') setActionError(tr(`Codex run failed: ${event.error ?? 'Unknown error'}`, `Codex 运行失败：${event.error ?? '未知错误'}`))
       }
       void (async () => {
         if (targetsSelectedSession) {
@@ -1392,7 +1402,7 @@ export function App() {
             const snapshot = await codexApi.readThread(event.threadId)
             if (event.sessionId === undefined || event.sessionId === selectedRef.current) setCodexMessages(snapshot.messages)
           } catch (reason) {
-            setActionError(`Codex 线程刷新失败：${errorText(reason)}`)
+            setActionError(tr(`Failed to refresh Codex thread: ${errorText(reason)}`, `Codex 线程刷新失败：${errorText(reason)}`))
           }
         }
         const drained = event.status === 'completed' && ownerSessionId !== undefined
@@ -1412,9 +1422,9 @@ export function App() {
       setCodexRunning(false)
       setCodexEffectivePermission(undefined)
       setCodexTurnId(undefined)
-      setActionError(`Codex CLI：${event.message}`)
+      setActionError(tr(`Codex CLI: ${event.message}`, `Codex CLI：${event.message}`))
     }
-  }), [drainCodexQueue, flushCodexDeltas, queueCodexDelta])
+  }), [drainCodexQueue, flushCodexDeltas, queueCodexDelta, tr])
 
   useEffect(() => subscribeAntigravity((event: AntigravityEvent) => {
     const sessionId = event.sessionId
@@ -1474,7 +1484,7 @@ export function App() {
         antigravityTurnIdRef.current = undefined
         flushAntigravityDeltas()
         setAntigravityTurnId(undefined)
-        if (event.status === 'failed') setActionError(`Antigravity 运行失败：${event.error ?? 'Unknown error'}`)
+        if (event.status === 'failed') setActionError(tr(`Antigravity run failed: ${event.error ?? 'Unknown error'}`, `Antigravity 运行失败：${event.error ?? '未知错误'}`))
       }
       void (async () => {
         if (targetsSelectedSession) {
@@ -1482,7 +1492,7 @@ export function App() {
             const snapshot = await antigravityApi.readThread(event.threadId)
             if (event.sessionId === undefined || event.sessionId === selectedRef.current) setAntigravityMessages(snapshot.messages)
           } catch (reason) {
-            setActionError(`Antigravity 会话刷新失败：${errorText(reason)}`)
+            setActionError(tr(`Failed to refresh Antigravity session: ${errorText(reason)}`, `Antigravity 会话刷新失败：${errorText(reason)}`))
           }
         }
         const drained = event.status === 'completed' && ownerSessionId !== undefined
@@ -1502,9 +1512,9 @@ export function App() {
       setAntigravityRunning(false)
       setAntigravityEffectivePermission(undefined)
       setAntigravityTurnId(undefined)
-      setActionError(`Antigravity CLI：${event.message}`)
+      setActionError(tr(`Antigravity CLI: ${event.message}`, `Antigravity CLI：${event.message}`))
     }
-  }), [drainAntigravityQueue, flushAntigravityDeltas, queueAntigravityDelta])
+  }), [drainAntigravityQueue, flushAntigravityDeltas, queueAntigravityDelta, tr])
 
   useEffect(() => {
     const ownerSessionId = subagentView?.childSessionId ?? selectedId
@@ -1618,11 +1628,11 @@ export function App() {
     } catch (reason) {
       if (signal?.aborted === true) return
       setHost(undefined)
-      setAppError(`无法连接本地 Harness Host：${errorText(reason)}`)
+      setAppError(tr(`Unable to connect to the local Harness Host: ${errorText(reason)}`, `无法连接本地 Harness Host：${errorText(reason)}`))
     } finally {
       if (signal?.aborted !== true) setChromeLoading(false)
     }
-  }, [deletedSessionIds, hiddenSidechatSessionIds, pendingSession, resumeLastSession])
+  }, [deletedSessionIds, hiddenSidechatSessionIds, pendingSession, resumeLastSession, tr])
 
   const refreshChrome = useCallback((signal?: AbortSignal): Promise<void> => {
     if (signal !== undefined) return refreshChromeNow(signal)
@@ -1656,11 +1666,11 @@ export function App() {
       setActionError(undefined)
     } catch (reason) {
       if (options.signal?.aborted === true || generation !== historyGeneration.current) return
-      setActionError(`会话刷新失败：${errorText(reason)}`)
+      setActionError(tr(`Failed to refresh session: ${errorText(reason)}`, `会话刷新失败：${errorText(reason)}`))
     } finally {
       if (generation === historyGeneration.current && options.signal?.aborted !== true) setHistoryLoading(false)
     }
-  }, [subagentView])
+  }, [subagentView, tr])
 
   const refreshSession = useCallback((
     sessionId: string,
@@ -1680,11 +1690,11 @@ export function App() {
       setPluginError(undefined)
     } catch (reason) {
       if (signal?.aborted === true) return
-      setPluginError(`插件清单读取失败：${errorText(reason)}`)
+      setPluginError(tr(`Failed to read plugin list: ${errorText(reason)}`, `插件清单读取失败：${errorText(reason)}`))
     } finally {
       if (signal?.aborted !== true) setPluginsLoading(false)
     }
-  }, [])
+  }, [tr])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -1958,7 +1968,10 @@ export function App() {
 
   const handleAddFiles = useCallback(async (files: File[]): Promise<void> => {
     if (codexActive || antigravityActive) {
-      setActionError(`${antigravityActive ? 'Antigravity' : 'Codex'} CLI 当前只接受文本输入；图片请切回 DeepSeek Host。`)
+      setActionError(tr(
+        `${antigravityActive ? 'Antigravity' : 'Codex'} CLI currently accepts text only. Switch to DeepSeek Host for images.`,
+        `${antigravityActive ? 'Antigravity' : 'Codex'} CLI 当前只接受文本输入；图片请切回 DeepSeek Host。`,
+      ))
       return
     }
     const limits = projectionValues?.imageLimits
@@ -1968,19 +1981,19 @@ export function App() {
       const mediaType = imageMediaType(file)
       if (mediaType === undefined) continue
       if (limits !== undefined && !limits.mediaTypes.includes(mediaType)) {
-        setActionError(`Host 不支持 ${mediaType} 图片。`)
+        setActionError(tr(`The Host does not support ${mediaType} images.`, `Host 不支持 ${mediaType} 图片。`))
         continue
       }
       if (limits !== undefined && file.size > limits.maxImageBytes) {
-        setActionError(`图片 ${file.name} 超过 Host 单图大小限制。`)
+        setActionError(tr(`Image ${file.name} exceeds the Host per-image limit.`, `图片 ${file.name} 超过 Host 单图大小限制。`))
         continue
       }
       if (limits !== undefined && attachments.length + accepted.length >= limits.maxImagesPerMessage) {
-        setActionError(`一条消息最多附加 ${limits.maxImagesPerMessage} 张图片。`)
+        setActionError(tr(`A message can include at most ${limits.maxImagesPerMessage} images.`, `一条消息最多附加 ${limits.maxImagesPerMessage} 张图片。`))
         break
       }
       if (limits !== undefined && totalBytes + file.size > limits.maxMessageImageBytes) {
-        setActionError('本条消息的图片总大小超过 Host 限制。')
+        setActionError(tr('The images in this message exceed the Host total-size limit.', '本条消息的图片总大小超过 Host 限制。'))
         break
       }
       try {
@@ -1995,14 +2008,14 @@ export function App() {
         })
         totalBytes += file.size
       } catch (reason) {
-        setActionError(`读取图片失败：${errorText(reason)}`)
+        setActionError(tr(`Failed to read image: ${errorText(reason)}`, `读取图片失败：${errorText(reason)}`))
       }
     }
     if (accepted.length > 0) {
       setAttachments(current => [...current, ...accepted])
       setActionError(undefined)
     }
-  }, [antigravityActive, attachments, codexActive, projectionValues?.imageLimits])
+  }, [antigravityActive, attachments, codexActive, projectionValues?.imageLimits, tr])
 
   const handleRemoveAttachment = useCallback((id: string): void => {
     setAttachments(current => {
@@ -2040,9 +2053,9 @@ export function App() {
       if (!receipt.accepted) throw new Error(receipt.reason ?? 'Host rejected the approval response')
       setPendingApprovals(current => current.filter(item => item.rpcId !== request.rpcId))
     } catch (reason) {
-      setActionError(`审批响应失败：${errorText(reason)}`)
+      setActionError(tr(`Approval response failed: ${errorText(reason)}`, `审批响应失败：${errorText(reason)}`))
     }
-  }, [])
+  }, [tr])
 
   const handleQuestion = useCallback(async (request: QuestionRequest, answers: QuestionAnswer[]): Promise<void> => {
     try {
@@ -2053,9 +2066,9 @@ export function App() {
       if (!receipt.accepted) throw new Error(receipt.reason ?? 'Host rejected the question response')
       setPendingQuestions(current => current.filter(item => item.rpcId !== request.rpcId))
     } catch (reason) {
-      setActionError(`问题响应失败：${errorText(reason)}`)
+      setActionError(tr(`Question response failed: ${errorText(reason)}`, `问题响应失败：${errorText(reason)}`))
     }
-  }, [])
+  }, [tr])
 
   const handleNewSidechat = (): void => {
     if (selectedId === undefined || sidechatThreads.length >= 24) return
@@ -2361,6 +2374,7 @@ export function App() {
     }
     const codexWasRunning = codexRunningRef.current
     const antigravityWasRunning = antigravityRunningRef.current
+    let delivered = false
     const runningNow = antigravityActive
       ? antigravityRunningRef.current
       : codexActive
@@ -2446,18 +2460,22 @@ export function App() {
           prompt,
           context: handoff.messages,
         })
+        delivered = true
         const next: AntigravitySessionState = {
           ...antigravitySession, active: true, conversationId: result.conversationId, model: current.model,
           effort: current.reasoningEffort ?? 'high', permission: antigravityPermission,
         }
         setAntigravitySession(next)
-        writeAntigravitySession(sessionId, next)
+        const savedAntigravity = writeAntigravitySession(sessionId, next)
         if (wasPending || selected?.blank === true) {
           void harnessApi.renameSession(sessionId, queuedPreview(prompt).slice(0, 48) || 'Antigravity session').then(() => refreshChrome()).catch(() => undefined)
         }
         const nextCodex = { ...codexSession, active: false }
         setCodexSession(nextCodex)
-        writeCodexSession(sessionId, nextCodex)
+        const savedCodex = writeCodexSession(sessionId, nextCodex)
+        if (!savedAntigravity || !savedCodex) {
+          setActionError(tr('Message sent, but the local provider state could not be saved.', '消息已发送，但本地模型状态未能保存。'))
+        }
         antigravityTurnIdRef.current = result.turnId
         setAntigravityTurnId(result.turnId)
         return
@@ -2498,6 +2516,7 @@ export function App() {
             }])
             try {
               await codexApi.steer(codexSession.threadId, activeTurnId, prompt)
+              delivered = true
             } catch (reason) {
               setCodexMessages(messages => messages.filter(message => message.id !== optimisticId))
               throw reason
@@ -2528,6 +2547,7 @@ export function App() {
           prompt,
           context: handoff.messages,
         })
+        delivered = true
         const next = {
           ...codexSession,
           active: true,
@@ -2538,13 +2558,16 @@ export function App() {
           ...(handoff.throughSeq === undefined ? {} : { codexImportedHostSeq: handoff.throughSeq }),
         }
         setCodexSession(next)
-        writeCodexSession(sessionId, next)
+        const savedCodex = writeCodexSession(sessionId, next)
         if (wasPending || selected?.blank === true) {
           void harnessApi.renameSession(sessionId, queuedPreview(prompt).slice(0, 48) || 'Codex session').then(() => refreshChrome()).catch(() => undefined)
         }
         const nextAntigravity = { ...antigravitySession, active: false }
         setAntigravitySession(nextAntigravity)
-        writeAntigravitySession(sessionId, nextAntigravity)
+        const savedAntigravity = writeAntigravitySession(sessionId, nextAntigravity)
+        if (!savedCodex || !savedAntigravity) {
+          setActionError(tr('Message sent, but the local provider state could not be saved.', '消息已发送，但本地模型状态未能保存。'))
+        }
         codexTurnIdRef.current = result.turnId
         setCodexTurnId(result.turnId)
         return
@@ -2559,6 +2582,7 @@ export function App() {
         if (subagentView.mode !== 'continuable') throw new Error('One-shot subagent 不能继续发送消息')
         if (attachments.length > 0) throw new Error('子代理会话暂不支持图片')
         await harnessApi.subagentPrompt({ parentSessionId: sessionId, childSessionId: subagentView.childSessionId, text: prompt })
+        delivered = true
       } else {
         const handoff = collectProviderHandoff(mergeAllProviderTranscripts([], retainedCodexMessages, retainedAntigravityMessages), codexSession.deepSeekImportedCodexSeq ?? 0)
         const content: PromptContentPart[] = [
@@ -2571,6 +2595,7 @@ export function App() {
           ...attachments.map(item => ({ type: 'image' as const, mediaType: item.mediaType, data: item.data, name: item.name })),
         ]
         await harnessApi.prompt(sessionId, content, deliveryMode)
+        delivered = true
         const next = {
           ...codexSession,
           active: false,
@@ -2595,37 +2620,43 @@ export function App() {
         if (!liveEventLanded) void refreshSession(sessionId)
       }, 700)
     } catch (reason) {
-      if (codexActive && !codexWasRunning) {
+      if (!delivered && codexActive && !codexWasRunning) {
         codexRunningRef.current = false
         codexTurnIdRef.current = undefined
         setCodexRunning(false)
         setCodexEffectivePermission(undefined)
         setCodexTurnId(undefined)
       }
-      if (antigravityActive && !antigravityWasRunning) {
+      if (!delivered && antigravityActive && !antigravityWasRunning) {
         antigravityRunningRef.current = false
         antigravityTurnIdRef.current = undefined
         setAntigravityRunning(false)
         setAntigravityEffectivePermission(undefined)
         setAntigravityTurnId(undefined)
       }
-      if (transition !== undefined) {
+      if (!delivered && transition !== undefined) {
         setPendingTurns(current => Object.fromEntries(
           Object.entries(current).filter(([, item]) => item.id !== transition.id),
         ))
       }
-      if (prompt !== '') {
+      if (!delivered && prompt !== '') {
         setDrafts(current => {
           const currentDraft = current[restoreDraftKey] ?? ''
           const restored = currentDraft === '' ? prompt : `${prompt}\n\n${currentDraft}`
           return { ...current, [restoreDraftKey]: restored }
         })
       }
-      setAttachments(current => {
-        const existing = new Set(current.map(item => item.id))
-        return [...submittedAttachments.filter(item => !existing.has(item.id)), ...current]
-      })
-      setActionError(`发送失败：${errorText(reason)}`)
+      if (!delivered) {
+        setAttachments(current => {
+          const existing = new Set(current.map(item => item.id))
+          return [...submittedAttachments.filter(item => !existing.has(item.id)), ...current]
+        })
+      } else {
+        releaseAttachments(submittedAttachments)
+      }
+      setActionError(delivered
+        ? tr(`Message was sent, but local follow-up processing failed: ${errorText(reason)}`, `消息已发送，但本地后续处理失败：${errorText(reason)}`)
+        : tr(`Send failed: ${errorText(reason)}`, `发送失败：${errorText(reason)}`))
     } finally {
       setBusy(false)
     }
@@ -2651,7 +2682,7 @@ export function App() {
       }
       await Promise.all([refreshChrome(), refreshSession(selectedId)])
     } catch (reason) {
-      setActionError(`停止失败：${errorText(reason)}`)
+      setActionError(tr(`Stop failed: ${errorText(reason)}`, `停止失败：${errorText(reason)}`))
     } finally {
       setBusy(false)
     }
@@ -2718,7 +2749,7 @@ export function App() {
       writeAntigravitySession(selectedId, nextAntigravity)
       await refreshChrome()
     } catch (reason) {
-      setActionError(`模型切换失败：${errorText(reason)}`)
+      setActionError(tr(`Model switch failed: ${errorText(reason)}`, `模型切换失败：${errorText(reason)}`))
     } finally {
       setBusy(false)
     }
@@ -2767,7 +2798,7 @@ export function App() {
       )
       setModels(await harnessApi.models(selectedId))
     } catch (reason) {
-      setActionError(`推理强度切换失败：${errorText(reason)}`)
+      setActionError(tr(`Reasoning effort switch failed: ${errorText(reason)}`, `推理强度切换失败：${errorText(reason)}`))
     } finally {
       setBusy(false)
     }
@@ -2813,7 +2844,7 @@ export function App() {
       await harnessApi.setPermission(selectedId, preset)
       await Promise.all([refreshChrome(), refreshSession(selectedId)])
     } catch (reason) {
-      setActionError(`权限切换失败：${errorText(reason)}`)
+      setActionError(tr(`Permission switch failed: ${errorText(reason)}`, `权限切换失败：${errorText(reason)}`))
     } finally {
       setBusy(false)
     }
@@ -2832,7 +2863,7 @@ export function App() {
       await harnessApi.prompt(selectedId, [{ type: 'text', text: '/plan off' }])
       await Promise.all([refreshChrome(), refreshSession(selectedId)])
     } catch (reason) {
-      setActionError(`退出计划模式失败：${errorText(reason)}`)
+      setActionError(tr(`Failed to exit plan mode: ${errorText(reason)}`, `退出计划模式失败：${errorText(reason)}`))
     } finally {
       setBusy(false)
     }
@@ -2887,7 +2918,7 @@ export function App() {
       await refreshChrome()
       if (session.sessionId === selectedId) await refreshSession(session.sessionId)
     } catch (reason) {
-      setActionError(`会话重命名失败：${errorText(reason)}`)
+      setActionError(tr(`Failed to rename session: ${errorText(reason)}`, `会话重命名失败：${errorText(reason)}`))
     } finally {
       setBusy(false)
     }
@@ -2903,7 +2934,7 @@ export function App() {
       selectedRef.current = result.sessionId
       await refreshChrome()
     } catch (reason) {
-      setActionError(`会话分叉失败：${errorText(reason)}`)
+      setActionError(tr(`Failed to fork session: ${errorText(reason)}`, `会话分叉失败：${errorText(reason)}`))
     } finally {
       setBusy(false)
     }
@@ -2922,7 +2953,7 @@ export function App() {
       }
       await refreshChrome()
     } catch (reason) {
-      setActionError(`会话归档失败：${errorText(reason)}`)
+      setActionError(tr(`Failed to archive session: ${errorText(reason)}`, `会话归档失败：${errorText(reason)}`))
     } finally {
       setBusy(false)
     }
@@ -2930,7 +2961,7 @@ export function App() {
 
   const handleDeleteSession = (session: SessionSummary): void => {
     if (session.running) {
-      setActionError('运行中的会话不能删除，请先停止任务。')
+      setActionError(tr('A running session cannot be deleted. Stop it first.', '运行中的会话不能删除，请先停止任务。'))
       return
     }
     const confirmed = window.confirm(
@@ -2959,7 +2990,7 @@ export function App() {
       setSelectedId(undefined)
       selectedRef.current = undefined
     }
-    setActionError('会话已从 DeepSeek Harness 中删除；Host 原始日志仍保留。')
+    setActionError(tr('The session was removed from DeepSeek Harness; the original Host log remains.', '会话已从 DeepSeek Harness 中删除；Host 原始日志仍保留。'))
   }
 
   const handleOpenPath = async (path?: string): Promise<void> => {
@@ -2969,7 +3000,7 @@ export function App() {
     try {
       await harnessApi.openPath(target)
     } catch (reason) {
-      setActionError(`打开路径失败：${errorText(reason)}`)
+      setActionError(tr(`Failed to open path: ${errorText(reason)}`, `打开路径失败：${errorText(reason)}`))
     } finally {
       setBusy(false)
     }
@@ -2984,9 +3015,12 @@ export function App() {
     setBusy(true)
     try {
       const result = await harnessApi.exportSession(selected.sessionId, includeDescendants)
-      if (!result.canceled) setActionError(`会话日志已导出：${result.path ?? result.filename ?? 'download started'}`)
+      if (!result.canceled) setActionError(tr(
+        `Session log exported: ${result.path ?? result.filename ?? 'download started'}`,
+        `会话日志已导出：${result.path ?? result.filename ?? '已开始下载'}`,
+      ))
     } catch (reason) {
-      setActionError(`会话日志导出失败：${errorText(reason)}`)
+      setActionError(tr(`Failed to export session log: ${errorText(reason)}`, `会话日志导出失败：${errorText(reason)}`))
     } finally {
       setBusy(false)
     }
@@ -2995,7 +3029,7 @@ export function App() {
   const handleSessionMenu = async (session: SessionSummary, extended = false): Promise<void> => {
     const desktop = window.dshDesktop
     if (desktop === undefined) {
-      setActionError('Session actions are available in the desktop app.')
+      setActionError(tr('Session actions are available in the desktop app.', '会话操作仅在桌面应用中可用。'))
       return
     }
     const action = await desktop.showSessionMenu({
@@ -3047,14 +3081,14 @@ export function App() {
         await desktop.openSessionWindow(session.sessionId)
       }
     } catch (reason) {
-      setActionError(`会话操作失败：${errorText(reason)}`)
+      setActionError(tr(`Session action failed: ${errorText(reason)}`, `会话操作失败：${errorText(reason)}`))
     }
   }
 
   const handleWorkspaceMenu = async (workspace: WorkspaceSummary): Promise<void> => {
     const desktop = window.dshDesktop
     if (desktop === undefined) {
-      setActionError('Work-folder actions are available in the desktop app.')
+      setActionError(tr('Work-folder actions are available in the desktop app.', '工作文件夹操作仅在桌面应用中可用。'))
       return
     }
     const action = await desktop.showWorkspaceMenu()
@@ -3067,7 +3101,7 @@ export function App() {
         await harnessApi.renameWorkspace(workspace.workspaceId, title)
         await refreshChrome()
       } catch (reason) {
-        setActionError(`工作区重命名失败：${errorText(reason)}`)
+        setActionError(tr(`Failed to rename workspace: ${errorText(reason)}`, `工作区重命名失败：${errorText(reason)}`))
       } finally {
         setBusy(false)
       }
@@ -3080,7 +3114,7 @@ export function App() {
         await harnessApi.deleteWorkspace(workspace.workspaceId)
         await refreshChrome()
       } catch (reason) {
-        setActionError(`工作区移除失败：${errorText(reason)}`)
+        setActionError(tr(`Failed to remove workspace: ${errorText(reason)}`, `工作区移除失败：${errorText(reason)}`))
       } finally {
         setBusy(false)
       }
@@ -3103,7 +3137,7 @@ export function App() {
         await refreshChrome()
       }
     } catch (reason) {
-      setActionError(`工作区操作失败：${errorText(reason)}`)
+      setActionError(tr(`Workspace action failed: ${errorText(reason)}`, `工作区操作失败：${errorText(reason)}`))
     } finally {
       setBusy(false)
     }
@@ -3116,7 +3150,7 @@ export function App() {
       await harnessApi.moveWorkspace(workspaceId, beforeWorkspaceId)
       await refreshChrome()
     } catch (reason) {
-      setActionError(`工作区排序失败：${errorText(reason)}`)
+      setActionError(tr(`Failed to reorder workspaces: ${errorText(reason)}`, `工作区排序失败：${errorText(reason)}`))
     } finally {
       setBusy(false)
     }
@@ -3129,7 +3163,7 @@ export function App() {
       await harnessApi.moveSession(workspaceId, sessionId, beforeSessionId)
       await refreshChrome()
     } catch (reason) {
-      setActionError(`会话排序失败：${errorText(reason)}`)
+      setActionError(tr(`Failed to reorder sessions: ${errorText(reason)}`, `会话排序失败：${errorText(reason)}`))
     } finally {
       setBusy(false)
     }
@@ -3162,11 +3196,11 @@ export function App() {
       historyRef.current = next
       setHistory(next)
     } catch (reason) {
-      setActionError(`读取更早历史失败：${errorText(reason)}`)
+      setActionError(tr(`Failed to load earlier history: ${errorText(reason)}`, `读取更早历史失败：${errorText(reason)}`))
     } finally {
       setHistoryLoadingOlder(false)
     }
-  }, [history, historyLoadingOlder, selectedId, subagentView])
+  }, [history, historyLoadingOlder, selectedId, subagentView, tr])
 
   const handleQueueAction = async (itemId: string, action: { kind: 'remove' | 'steer' } | { kind: 'edit'; text: string }): Promise<void> => {
     if (selectedId === undefined || subagentView !== undefined || busy) return
@@ -3252,7 +3286,7 @@ export function App() {
         : action)
       await refreshSession(selectedId)
     } catch (reason) {
-      setActionError(`队列操作失败：${errorText(reason)}`)
+      setActionError(tr(`Queue action failed: ${errorText(reason)}`, `队列操作失败：${errorText(reason)}`))
     } finally {
       setBusy(false)
     }
@@ -3301,7 +3335,7 @@ export function App() {
       }
       await refreshSession(selectedId)
     } catch (reason) {
-      setActionError(`目标操作失败：${errorText(reason)}`)
+      setActionError(tr(`Goal action failed: ${errorText(reason)}`, `目标操作失败：${errorText(reason)}`))
     } finally {
       setBusy(false)
     }
@@ -3344,7 +3378,7 @@ export function App() {
       if (existing === undefined) beginPendingSession(workspace)
       else selectSession(existing.sessionId)
     } catch (reason) {
-      setActionError(`打开工作文件夹失败：${errorText(reason)}`)
+      setActionError(tr(`Failed to open work folder: ${errorText(reason)}`, `打开工作文件夹失败：${errorText(reason)}`))
     } finally {
       setBusy(false)
     }
@@ -3720,6 +3754,7 @@ export function App() {
 
         {terminalOpen && (
           <TerminalDock
+            sessionId={selectedId}
             cwd={activeWorkspace?.path ?? pendingSession?.cwd ?? selected?.cwd ?? host?.cwd}
             onClose={() => setTerminalOpen(false)}
           />

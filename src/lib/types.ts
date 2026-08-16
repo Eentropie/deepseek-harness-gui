@@ -434,7 +434,7 @@ export interface AntigravityCatalogModel {
   name: string
   defaultEffort: string
   efforts: ModelEffort[]
-  variants: Array<{ effort: string; model: string }>
+  variants: Array<{ effort: string; model: string; usesEffortFlag: boolean }>
   isDefault: boolean
 }
 
