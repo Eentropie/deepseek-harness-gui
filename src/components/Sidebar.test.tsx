@@ -87,4 +87,39 @@ describe('Sidebar archived sessions', () => {
     expect(markup).toContain('Search conversations')
     expect(markup).not.toContain('class="search-box"')
   })
+
+  it('does not expose workspace sessions while the sidebar is collapsed', () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'en', setItem: noop })
+    const markup = renderToStaticMarkup(
+      <I18nProvider><Sidebar
+        sessions={sessions}
+        workspaces={workspaces}
+        archivedSessionIds={[]}
+        pinnedSessionIds={new Set()}
+        unreadSessionIds={new Set()}
+        deletedSessionIds={new Set()}
+        collapsed
+        onSelect={noop}
+        onNew={noop}
+        onOpenFolder={noop}
+        onWorkspace={noop}
+        onToggle={noop}
+        onPlugins={noop}
+        onSettings={noop}
+        searchHits={[]}
+        searching={false}
+        onSearch={noop}
+        onSessionMenu={noop}
+        onWorkspaceMenu={noop}
+        onMoveWorkspace={noop}
+        onMoveSession={noop}
+      /></I18nProvider>,
+    )
+
+    expect(markup).toContain('aria-label="Expand sidebar"')
+    expect(markup).toContain('title="New session"')
+    expect(markup).not.toContain('class="sidebar-scroll"')
+    expect(markup).not.toContain('class="session-row"')
+    expect(markup).not.toContain('active-preset')
+  })
 })

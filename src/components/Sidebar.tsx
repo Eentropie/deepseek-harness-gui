@@ -290,7 +290,7 @@ export function Sidebar({
         </div>
       )}
 
-      <div className="sidebar-scroll">
+      {!collapsed && <div className="sidebar-scroll">
         {workspaces.map(workspace => {
           const rows = workspace.sessionIds
             .map(id => byId.get(id))
@@ -322,8 +322,7 @@ export function Sidebar({
                 if (payload?.kind === 'session' && payload.workspaceId === workspace.workspaceId) onMoveSession(workspace.workspaceId, payload.id)
               }}
             >
-              {!collapsed && (
-                <div
+              <div
                   className="group-heading"
                   data-active={workspace.workspaceId === activeWorkspaceId}
                   draggable
@@ -362,21 +361,20 @@ export function Sidebar({
                   <button type="button" className="workspace-menu" onClick={event => { event.stopPropagation(); onWorkspaceMenu(workspace) }} aria-label={`Manage ${workspace.title}`} title="Workspace actions">
                     <Icon name="more" size={13} />
                   </button>
-                </div>
-              )}
-              {(!closed || collapsed) && rows.map(session => row(session, workspace.workspaceId))}
+              </div>
+              {!closed && rows.map(session => row(session, workspace.workspaceId))}
             </section>
           )
         })}
         {ungrouped.filter(visible).length > 0 && (
           <section className="session-group">
-            {!collapsed && <div className="group-label">{tr('Ungrouped', '未分组')}</div>}
+            <div className="group-label">{tr('Ungrouped', '未分组')}</div>
             {ungrouped.filter(visible)
               .sort((left, right) => Number(pinnedSessionIds.has(right.sessionId)) - Number(pinnedSessionIds.has(left.sessionId)))
               .map(session => row(session))}
           </section>
         )}
-      </div>
+      </div>}
 
       <div className="sidebar-footer">
         <button type="button" className="footer-button" onClick={onPlugins} title={`Manage plugins (${pluginShortcut})`}>
