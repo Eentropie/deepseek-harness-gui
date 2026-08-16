@@ -92,4 +92,56 @@ printf '%s\\n' '{"event":"result","result":{"status":"SUCCESS","response":"Finis
     })
     cli.shutdown()
   })
+
+  it('waits for the previous process to exit before launching another turn', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'dsh-antigravity-serial-'))
+    temporaryDirectories.push(fixture)
+    const executable = join(fixture, 'agy')
+    const stateFile = join(fixture, 'state', 'antigravity-sessions.json')
+    const lockDirectory = join(fixture, 'active-turn')
+    const countFile = join(fixture, 'count')
+    await writeFile(executable, `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf '1.2.3\\n'
+  exit 0
+fi
+if [ "$1" = "models" ]; then
+  printf 'gemini-test-high\\tGemini Test (High)\\n'
+  exit 0
+fi
+if ! mkdir '${lockDirectory}' 2>/dev/null; then
+  printf 'overlapping Antigravity process\\n' >&2
+  exit 17
+fi
+count=0
+if [ -f '${countFile}' ]; then count=$(cat '${countFile}'); fi
+count=$((count + 1))
+printf '%s' "$count" > '${countFile}'
+printf '{"event":"init","conversation_id":"conversation-%s"}\\n' "$count"
+sleep 0.12
+printf '%s\\n' '{"event":"result","result":{"status":"SUCCESS","response":"Finished."}}'
+sleep 0.12
+rmdir '${lockDirectory}'
+`, { mode: 0o700 })
+    await chmod(executable, 0o700)
+    process.env['DEEPSEEK_HARNESS_ANTIGRAVITY_BIN'] = executable
+
+    const cli = new AntigravityCli(stateFile, () => undefined)
+    await cli.catalog(true)
+    const input = {
+      cwd: fixture,
+      model: 'gemini-test',
+      effort: 'high',
+      permission: 'read-only' as const,
+      network: 'off' as const,
+      prompt: 'Inspect the fixture.',
+    }
+    const first = await cli.prompt({ ...input, sessionId: 'session-one' })
+    const second = await cli.prompt({ ...input, sessionId: 'session-two' })
+
+    expect(first.conversationId).toBe('conversation-1')
+    expect(second.conversationId).toBe('conversation-2')
+    expect(await readFile(countFile, 'utf8')).toBe('2')
+    cli.shutdown()
+  })
 })

@@ -380,17 +380,34 @@ export function AgentRoom({
     })
     try {
       const permission = agent.permission as AntigravityPermissionMode
+      const effort = agent.effort
       updateAgent(agent.id, { effectivePermission: permission })
-      const result = await antigravityApi.prompt({
+      const network = resolvedNetwork(agent.network)
+      const start = (conversationId?: string) => antigravityApi.prompt({
         sessionId: owner,
-        ...(agent.antigravityConversationId === undefined ? {} : { conversationId: agent.antigravityConversationId }),
+        ...(conversationId === undefined ? {} : { conversationId }),
         cwd: runtimeCwd,
         model: agent.model,
-        effort: agent.effort,
+        effort,
         permission,
-        network: resolvedNetwork(agent.network),
+        network,
         prompt,
       })
+      let result: Awaited<ReturnType<typeof antigravityApi.prompt>>
+      try {
+        result = await start(agent.antigravityConversationId)
+      } catch (reason) {
+        const message = errorText(reason)
+        if (!/Antigravity CLI (?:exited before initialization|did not initialize its event stream)/i.test(message)) throw reason
+        completed = undefined
+        failed = undefined
+        setNotice(tr(
+          'Antigravity exited during initialization. Retrying once with a fresh conversation.',
+          'Antigravity 在初始化时退出，正在使用新会话自动重试一次。',
+        ))
+        await sleep(650)
+        result = await start()
+      }
       activeRuns.current.set(agent.id, { kind: 'antigravity', threadId: result.conversationId, turnId: result.turnId })
       updateAgent(agent.id, { antigravityConversationId: result.conversationId, runtimeCwd, isolated: runtimeCwd !== cwd })
       if (completed === undefined && failed === undefined) {

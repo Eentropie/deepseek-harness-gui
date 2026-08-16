@@ -53,6 +53,7 @@ interface ActiveTurn {
   initTimer: ReturnType<typeof setTimeout>
   stdout: string
   stderr: string
+  releaseSlot: () => void
 }
 
 interface PersistedThreads {
@@ -140,6 +141,8 @@ export class AntigravityCli {
   private readonly messagesByConversation = new Map<string, ConversationMessage[]>()
   private loaded?: Promise<void>
   private persistChain = Promise.resolve()
+  private turnLaunchTail: Promise<void> = Promise.resolve()
+  private shuttingDown = false
 
   constructor(
     private readonly stateFile: string,
@@ -199,6 +202,7 @@ export class AntigravityCli {
 
   async prompt(input: AntigravityPromptInput): Promise<AntigravityPromptResult> {
     this.assertPrompt(input)
+    if (this.shuttingDown) throw new Error('Antigravity CLI bridge is shutting down')
     await this.ensureLoaded()
     const candidate = await executable()
     const catalog = this.catalogCache ?? (await this.catalog(true)).models
@@ -206,17 +210,28 @@ export class AntigravityCli {
     if (model === undefined) throw new Error(`Antigravity model ${input.model} is unavailable`)
     const variant = antigravityVariant(model, input.effort)
     if (variant === undefined) throw new Error(`${input.effort} is not supported by ${model.name}`)
+    const releaseSlot = await this.reserveTurnSlot()
+    if (this.shuttingDown) {
+      releaseSlot()
+      throw new Error('Antigravity CLI bridge is shutting down')
+    }
     const turnId = randomUUID()
     const args = this.promptArguments(input, variant, model.name)
-    const child = spawn(candidate.path, args, {
-      cwd: input.cwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: codexSpawnEnvironment(candidate.path),
-      shell: candidate.shell,
-    })
-    child.stdin.end()
-    child.stdout.setEncoding('utf8')
-    child.stderr.setEncoding('utf8')
+    let child: ChildProcessWithoutNullStreams
+    try {
+      child = spawn(candidate.path, args, {
+        cwd: input.cwd,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: codexSpawnEnvironment(candidate.path),
+        shell: candidate.shell,
+      })
+      child.stdin.end()
+      child.stdout.setEncoding('utf8')
+      child.stderr.setEncoding('utf8')
+    } catch (reason) {
+      releaseSlot()
+      throw reason
+    }
     return new Promise((resolve, reject) => {
       const turn: ActiveTurn = {
         process: child,
@@ -240,6 +255,7 @@ export class AntigravityCli {
         }, 45_000),
         stdout: '',
         stderr: '',
+        releaseSlot,
       }
       this.activeByTurn.set(turnId, turn)
       child.stdout.on('data', (chunk: string) => this.consume(turn, chunk))
@@ -262,8 +278,21 @@ export class AntigravityCli {
   }
 
   shutdown(): void {
+    this.shuttingDown = true
     for (const turn of this.activeByTurn.values()) turn.process.kill('SIGTERM')
-    this.activeByTurn.clear()
+  }
+
+  private async reserveTurnSlot(): Promise<() => void> {
+    const previous = this.turnLaunchTail
+    let unlock: (() => void) | undefined
+    this.turnLaunchTail = new Promise<void>(resolve => { unlock = resolve })
+    await previous
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      unlock?.()
+    }
   }
 
   private promptArguments(input: AntigravityPromptInput, variant: string, modelName: string): string[] {
@@ -433,9 +462,10 @@ export class AntigravityCli {
   private finishProcess(turn: ActiveTurn, code: number | null, signal: NodeJS.Signals | null): void {
     clearTimeout(turn.initTimer)
     this.activeByTurn.delete(turn.turnId)
+    turn.releaseSlot()
     if (!turn.settled) {
       turn.settled = true
-      turn.reject(new Error(turn.stderr.trim() || `Antigravity CLI exited before initialization (${signal ?? code ?? 'unknown'})`))
+      turn.reject(new Error(turn.stderr.trim() || turn.stdout.trim() || `Antigravity CLI exited before initialization (${signal ?? code ?? 'unknown'})`))
       return
     }
     if (turn.resultSeen) return
@@ -456,6 +486,7 @@ export class AntigravityCli {
   private failTurn(turn: ActiveTurn, reason: unknown): void {
     clearTimeout(turn.initTimer)
     this.activeByTurn.delete(turn.turnId)
+    turn.releaseSlot()
     if (!turn.settled) {
       turn.settled = true
       turn.reject(reason instanceof Error ? reason : new Error(errorMessage(reason)))
