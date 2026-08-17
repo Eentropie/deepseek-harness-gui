@@ -111,10 +111,12 @@ else {
   count += 1
   fs.writeFileSync(countFile, String(count))
   emit({ event: 'init', conversation_id: 'conversation-' + count })
-  setTimeout(() => {
-    emit({ event: 'result', result: { status: 'SUCCESS', response: 'Finished.' } })
-    setTimeout(() => fs.rmdirSync(lockDirectory), 120)
-  }, 120)
+    setTimeout(() => {
+      emit({ event: 'result', result: { status: 'SUCCESS', response: 'Finished.' } })
+      setTimeout(() => {
+        try { fs.rmdirSync(lockDirectory) } finally { process.exit(0) }
+      }, 120)
+    }, 120)
 }
 `)
     process.env['DEEPSEEK_HARNESS_ANTIGRAVITY_BIN'] = executable
