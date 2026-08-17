@@ -4,7 +4,7 @@
   "description": "Standalone macOS and Windows desktop client for a local DeepSeek Harness Host.",
   "author": "Local Harness",
   "private": false,
-  "version": "0.3.2",
+  "version": "0.3.3",
   "type": "module",
   "main": "dist-electron/main.cjs",
   "scripts": {

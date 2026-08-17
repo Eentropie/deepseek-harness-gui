@@ -9,7 +9,7 @@
 下载并运行：
 
 ```text
-DeepSeek-Harness-0.3.2-Windows-x64.exe
+DeepSeek-Harness-0.3.3-Windows-x64.exe
 ```
 
 NSIS 安装器可选择安装目录，并创建桌面和开始菜单快捷方式。首次启动向导会依次检查 Node.js、Local Host、可用的模型 Provider/API 凭据以及 Codex CLI/登录。工作文件夹不属于 Setup，进入主界面后再按需选择。
@@ -109,5 +109,5 @@ corepack pnpm dist:win
 
 ```text
 release\win-unpacked\DeepSeek Harness.exe
-release\DeepSeek-Harness-0.3.2-Windows-x64.exe
+release\DeepSeek-Harness-0.3.3-Windows-x64.exe
 ```

@@ -15,8 +15,8 @@ afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map(path => rm(path, {
     recursive: true,
     force: true,
-    maxRetries: 3,
-    retryDelay: 20,
+    maxRetries: 20,
+    retryDelay: 100,
   })))
 })
 
