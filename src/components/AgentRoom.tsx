@@ -33,6 +33,7 @@ import type { AntigravityEvent, AntigravityPermissionMode, CodexEvent, Conversat
 import { Icon } from './Icon.tsx'
 import { Markdown } from './Markdown.tsx'
 import { ProviderLogo } from './ProviderLogo.tsx'
+import { CopyTextButton } from './CopyTextButton.tsx'
 import { useI18n } from '../lib/i18n.tsx'
 
 export interface AgentRoomRequest {
@@ -40,6 +41,8 @@ export interface AgentRoomRequest {
   kind: 'audit' | 'followup'
   text: string
   autoRun?: boolean
+  sourceSessionId?: string
+  sourceMessageId?: string
 }
 
 interface AgentRoomProps {
@@ -319,7 +322,7 @@ export function AgentRoom({
   }
 
   const handleRemove = (agentId: string): void => {
-    if (room.running || !window.confirm('Remove this managed agent from the room? Its Host/Codex/Antigravity transcript will not be deleted.')) return
+    if (room.running) return
     commitRoom(current => {
       const removedHostSessionId = current.agents.find(agent => agent.id === agentId)?.hostSessionId
       return {
@@ -650,6 +653,10 @@ export function AgentRoom({
 
   useEffect(() => {
     if (request === undefined || parentSessionId === undefined) return
+    if (request.sourceSessionId !== undefined && request.sourceSessionId !== parentSessionId) {
+      onRequestHandled(request.id)
+      return
+    }
     if (request.kind === 'audit') {
       const context = buildAgentRoomContext(parentSessionId, parentMessages)
       commitRoom(current => ({
@@ -745,7 +752,7 @@ export function AgentRoom({
             const agent = room.agents.find(candidate => candidate.id === artifact.agentId)
             return <details key={artifact.id} data-status={artifact.status}>
               <summary><i /><span><strong>{agent?.label ?? 'Removed agent'}</strong><small>{artifact.phase} · {artifact.status}</small></span><Icon name="chevron-right" size={11} /></summary>
-              <div>{artifact.output !== undefined ? <Markdown>{artifact.output}</Markdown> : <p>{artifact.error ?? 'Agent is working…'}</p>}</div>
+              <div>{artifact.output !== undefined ? <><div className="agent-output-toolbar"><CopyTextButton text={artifact.output} /></div><Markdown>{artifact.output}</Markdown></> : <p>{artifact.error ?? 'Agent is working…'}</p>}</div>
             </details>
           })}</div>
         </section>
@@ -754,7 +761,7 @@ export function AgentRoom({
       {room.finalOutput !== undefined && (
         <section className="agent-room-section agent-final">
           <div className="review-heading"><strong>{tr('Judge verdict', '裁判结论')}</strong><span>{room.reportStatus === 'delivered' ? tr('Returned to main', '已回注主线程') : tr('Returning…', '正在回注…')}</span></div>
-          <div className="agent-final-copy"><Markdown>{room.finalOutput}</Markdown></div>
+          <div className="agent-final-copy"><div className="agent-output-toolbar"><CopyTextButton text={room.finalOutput} /></div><Markdown>{room.finalOutput}</Markdown></div>
           <div className="agent-room-followup">
             <textarea value={followup} onChange={event => setFollowup(event.target.value)} placeholder={tr('Ask the whole room, or start with @AgentName…', '追问整个 Room，或以 @Agent名称 开头…')} disabled={room.running} />
             <button type="button" onClick={() => { void handleFollowup(followup) }} disabled={room.running || followup.trim() === ''}>{tr('Ask room', '追问 Room')}</button>

@@ -1308,6 +1308,52 @@ a:focus-visible {
   width: calc(100% - 37px);
 }
 
+.agent-room-request-dock {
+  width: min(840px, calc(100% - 38px));
+  margin: 0 auto 7px;
+  padding: 0 8px;
+  flex: none;
+}
+
+.agent-room-request-card {
+  width: 100%;
+  padding: 10px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  color: var(--ink-soft);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-soft);
+  animation: deepseek-panel-in 180ms var(--motion-settle) both;
+}
+
+.agent-room-request-icon {
+  color: var(--ink-soft);
+  background: var(--surface-soft);
+}
+
+.agent-room-request-card .interaction-copy p {
+  max-height: 78px;
+  margin: 4px 0 0;
+  padding: 6px 7px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--ink-soft);
+  background: var(--surface-soft);
+  font-size: 9px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.agent-room-request-card .interaction-actions {
+  align-self: center;
+  margin-left: auto;
+}
+
 .question-panel {
   flex-wrap: wrap;
 }
@@ -3422,6 +3468,32 @@ a:focus-visible {
 .agent-artifacts details > div > p { margin: 0; }
 .agent-final { border-bottom: 1px solid var(--border-strong); }
 .agent-final-copy { max-height: 420px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); }
+.agent-output-toolbar {
+  min-height: 24px;
+  margin: -3px -3px 5px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.copy-text-button {
+  min-height: 24px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--surface-raised);
+  font-size: 7.5px;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.copy-text-button:hover,
+.copy-text-button:focus-visible { color: var(--ink); border-color: var(--border-strong); }
+.copy-text-button[data-copy-state='copied'] { color: var(--ink); }
+.copy-text-button[data-copy-state='failed'] { color: var(--muted-2); }
 .agent-room-followup { margin-top: 8px; display: grid; gap: 6px; }
 .agent-room-followup textarea { min-height: 66px; padding: 8px; resize: vertical; line-height: 1.45; }
 .agent-room-followup button { min-height: 32px; border-radius: 7px; color: var(--main); background: var(--ink); cursor: pointer; }

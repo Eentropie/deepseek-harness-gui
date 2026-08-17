@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from 'react'
 import { Composer } from './components/Composer.tsx'
+import { AgentRoomRequestCard } from './components/AgentRoomRequestCard.tsx'
 import { CommandPalette } from './components/CommandPalette.tsx'
 import { Conversation } from './components/Conversation.tsx'
 import { GoalDialog } from './components/GoalDialog.tsx'
@@ -566,6 +567,7 @@ export function App() {
     return Number.isFinite(stored) ? Math.min(720, Math.max(280, stored)) : 360
   })
   const [agentRoomRequest, setAgentRoomRequest] = useState<AgentRoomRequest>()
+  const [automaticAgentRoomRequests, setAutomaticAgentRoomRequests] = useState<Record<string, AgentRoomRequest>>({})
   const [terminalOpen, setTerminalOpen] = useState(() => storedBoolean(TERMINAL_OPEN_STORAGE_KEY, false))
   const [themeMode, setThemeMode] = useState<ThemeMode>(storedThemeMode)
   const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
@@ -616,6 +618,14 @@ export function App() {
     localStorage.setItem(key, greeting)
     return greeting
   }, [locale])
+
+  const clearAutomaticAgentRoomRequest = useCallback((sessionId: string): void => {
+    setAutomaticAgentRoomRequests(current => {
+      if (current[sessionId] === undefined) return current
+      const { [sessionId]: _removed, ...rest } = current
+      return rest
+    })
+  }, [])
 
   const selectSession = useCallback((sessionId: string): void => {
     setPendingSession(undefined)
@@ -2412,6 +2422,7 @@ export function App() {
         return
       }
       const text = (auditCommand?.[1] ?? followupCommand?.[1] ?? '').trim()
+      clearAutomaticAgentRoomRequest(selectedId)
       setAgentRoomRequest({
         id: crypto.randomUUID(),
         kind: auditCommand !== null ? 'audit' : 'followup',
@@ -3501,6 +3512,7 @@ export function App() {
     ? activeSubagent?.activity === 'running'
     : antigravityRunning || codexRunning || selected?.running === true
   const activeTitle = subagentView?.label ?? titleOf(selected)
+  const automaticAgentRoomRequest = selectedId === undefined ? undefined : automaticAgentRoomRequests[selectedId]
   const activeModels = subagentView === undefined ? presentedModels : undefined
   const activeJobs = subagentView === undefined
     ? (selectedId === undefined ? [] : jobsBySession[selectedId] ?? [])
@@ -3523,13 +3535,17 @@ export function App() {
         setActionError(tr('Start an Agent Room audit before sending a room follow-up.', '请先启动一次 Agent Room 审计，再追问 Room。'))
         return
       }
-      setAgentRoomRequest({
-        id: crypto.randomUUID(),
-        kind: directive.action,
-        text: directive.text,
-        autoRun: true,
-      })
-      setInspectorOpen(true)
+      setAutomaticAgentRoomRequests(current => ({
+        ...current,
+        [selectedId]: {
+          id: crypto.randomUUID(),
+          kind: directive.action,
+          text: directive.text,
+          autoRun: true,
+          sourceSessionId: selectedId,
+          sourceMessageId: message.id,
+        },
+      }))
       return
     }
   }, [activeRunning, selectedId, subagentView, tr, unifiedMessages])
@@ -3541,6 +3557,7 @@ export function App() {
     }
     const recentUser = [...activeMessages].reverse().find(message => message.role === 'user')
     const recentText = recentUser?.blocks.flatMap(block => block.kind === 'text' ? [block.text.trim()] : []).filter(Boolean).join('\n')
+    clearAutomaticAgentRoomRequest(selectedId)
     setAgentRoomRequest({
       id: crypto.randomUUID(),
       kind: 'audit',
@@ -3775,6 +3792,25 @@ export function App() {
           onLoadOlder={() => { void handleLoadOlder() }}
           onUseSuggestion={setDraft}
         />
+
+        {automaticAgentRoomRequest !== undefined && selectedId !== undefined && (
+          <AgentRoomRequestCard
+            request={automaticAgentRoomRequest}
+            onDismiss={() => clearAutomaticAgentRoomRequest(selectedId)}
+            onConfirm={() => {
+              const sourceAvailable = automaticAgentRoomRequest.sourceSessionId === selectedId
+                && (automaticAgentRoomRequest.sourceMessageId === undefined
+                  || unifiedMessages.some(message => message.id === automaticAgentRoomRequest.sourceMessageId && message.role === 'assistant'))
+              clearAutomaticAgentRoomRequest(selectedId)
+              if (!sourceAvailable) {
+                setActionError(tr('This automatic Agent Room request has expired. Ask the assistant to request it again.', '这条自动 Agent Room 请求已过期，请让助手重新发起。'))
+                return
+              }
+              setAgentRoomRequest(automaticAgentRoomRequest)
+              setInspectorOpen(true)
+            }}
+          />
+        )}
 
         <InteractionDock
           approvals={pendingApprovals}
