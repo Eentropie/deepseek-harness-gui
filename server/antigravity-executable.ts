@@ -28,7 +28,7 @@ export function antigravityExecutableCandidates(
       ...(programFiles === undefined ? [] : [win32.join(programFiles, 'Google', 'antigravity-cli', 'agy.exe')]),
     ]
     return unique([...configuredPaths, ...conventional, ...pathDirectories.map(directory => win32.join(directory, 'agy.exe'))])
-      .map(path => ({ path, shell: false }))
+      .map(path => ({ path, shell: /\.(?:cmd|bat)$/i.test(path) }))
   }
   const pathDirectories = (environment['PATH'] ?? '').split(':').map(value => value.trim()).filter(Boolean)
   return unique([

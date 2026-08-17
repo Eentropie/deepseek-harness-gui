@@ -1,9 +1,10 @@
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AntigravityEvent } from '../src/lib/types.ts'
 import { AntigravityCli } from './antigravity-cli.ts'
+import { writeNodeCliFixture } from './test-cli-fixture.ts'
 
 const previousExecutable = process.env['DEEPSEEK_HARNESS_ANTIGRAVITY_BIN']
 const temporaryDirectories: string[] = []
@@ -23,24 +24,20 @@ describe('Antigravity CLI desktop bridge', () => {
   it('streams one turn and persists a resumable transcript', async () => {
     const fixture = await mkdtemp(join(tmpdir(), 'dsh-antigravity-cli-'))
     temporaryDirectories.push(fixture)
-    const executable = join(fixture, 'agy')
     const stateFile = join(fixture, 'antigravity-sessions.json')
-    await writeFile(executable, `#!/bin/sh
-if [ "$1" = "--version" ]; then
-  printf '1.2.3\\n'
-  exit 0
-fi
-if [ "$1" = "models" ]; then
-  printf 'gemini-test-low\\tGemini Test (Low)\\ngemini-test-high\\tGemini Test (High)\\n'
-  exit 0
-fi
-printf '%s\\n' '{"event":"init","conversation_id":"conversation-test"}'
-printf '%s\\n' '{"event":"step_update","step_update":{"step_type":"analysis","step_index":1,"text_delta":"checking","state":"ACTIVE"}}'
-printf '%s\\n' '{"event":"step_update","step_update":{"step_type":"tool","step_index":2,"tool_name":"read_file","state":"DONE","tool_info":{"parameters":{"path":"README.md"},"output":"ok"}}}'
-printf '%s\\n' '{"event":"step_update","step_update":{"step_type":"agent_response","step_index":3,"text_delta":"Finished.","state":"DONE"}}'
-printf '%s\\n' '{"event":"result","result":{"status":"SUCCESS","response":"Finished."}}'
-`, { mode: 0o700 })
-    await chmod(executable, 0o700)
+    const executable = await writeNodeCliFixture(fixture, 'agy', String.raw`
+const args = process.argv.slice(2)
+const emit = value => process.stdout.write(JSON.stringify(value) + '\n')
+if (args[0] === '--version') process.stdout.write('1.2.3\n')
+else if (args[0] === 'models') process.stdout.write('gemini-test-low\tGemini Test (Low)\ngemini-test-high\tGemini Test (High)\n')
+else {
+  emit({ event: 'init', conversation_id: 'conversation-test' })
+  emit({ event: 'step_update', step_update: { step_type: 'analysis', step_index: 1, text_delta: 'checking', state: 'ACTIVE' } })
+  emit({ event: 'step_update', step_update: { step_type: 'tool', step_index: 2, tool_name: 'read_file', state: 'DONE', tool_info: { parameters: { path: 'README.md' }, output: 'ok' } } })
+  emit({ event: 'step_update', step_update: { step_type: 'agent_response', step_index: 3, text_delta: 'Finished.', state: 'DONE' } })
+  emit({ event: 'result', result: { status: 'SUCCESS', response: 'Finished.' } })
+}
+`)
     process.env['DEEPSEEK_HARNESS_ANTIGRAVITY_BIN'] = executable
 
     const events: AntigravityEvent[] = []
@@ -96,34 +93,30 @@ printf '%s\\n' '{"event":"result","result":{"status":"SUCCESS","response":"Finis
   it('waits for the previous process to exit before launching another turn', async () => {
     const fixture = await mkdtemp(join(tmpdir(), 'dsh-antigravity-serial-'))
     temporaryDirectories.push(fixture)
-    const executable = join(fixture, 'agy')
     const stateFile = join(fixture, 'state', 'antigravity-sessions.json')
     const lockDirectory = join(fixture, 'active-turn')
     const countFile = join(fixture, 'count')
-    await writeFile(executable, `#!/bin/sh
-if [ "$1" = "--version" ]; then
-  printf '1.2.3\\n'
-  exit 0
-fi
-if [ "$1" = "models" ]; then
-  printf 'gemini-test-high\\tGemini Test (High)\\n'
-  exit 0
-fi
-if ! mkdir '${lockDirectory}' 2>/dev/null; then
-  printf 'overlapping Antigravity process\\n' >&2
-  exit 17
-fi
-count=0
-if [ -f '${countFile}' ]; then count=$(cat '${countFile}'); fi
-count=$((count + 1))
-printf '%s' "$count" > '${countFile}'
-printf '{"event":"init","conversation_id":"conversation-%s"}\\n' "$count"
-sleep 0.12
-printf '%s\\n' '{"event":"result","result":{"status":"SUCCESS","response":"Finished."}}'
-sleep 0.12
-rmdir '${lockDirectory}'
-`, { mode: 0o700 })
-    await chmod(executable, 0o700)
+    const executable = await writeNodeCliFixture(fixture, 'agy', String.raw`
+const fs = require('node:fs')
+const args = process.argv.slice(2)
+const emit = value => process.stdout.write(JSON.stringify(value) + '\n')
+if (args[0] === '--version') process.stdout.write('1.2.3\n')
+else if (args[0] === 'models') process.stdout.write('gemini-test-high\tGemini Test (High)\n')
+else {
+  const lockDirectory = ${JSON.stringify(lockDirectory)}
+  const countFile = ${JSON.stringify(countFile)}
+  try { fs.mkdirSync(lockDirectory) } catch { process.stderr.write('overlapping Antigravity process\n'); process.exit(17) }
+  let count = 0
+  try { count = Number(fs.readFileSync(countFile, 'utf8')) } catch {}
+  count += 1
+  fs.writeFileSync(countFile, String(count))
+  emit({ event: 'init', conversation_id: 'conversation-' + count })
+  setTimeout(() => {
+    emit({ event: 'result', result: { status: 'SUCCESS', response: 'Finished.' } })
+    setTimeout(() => fs.rmdirSync(lockDirectory), 120)
+  }, 120)
+}
+`)
     process.env['DEEPSEEK_HARNESS_ANTIGRAVITY_BIN'] = executable
 
     const cli = new AntigravityCli(stateFile, () => undefined)
@@ -148,7 +141,6 @@ rmdir '${lockDirectory}'
   it('omits unsupported effort flags and migrates persisted empty assistant messages', async () => {
     const fixture = await mkdtemp(join(tmpdir(), 'dsh-antigravity-fixed-effort-'))
     temporaryDirectories.push(fixture)
-    const executable = join(fixture, 'agy')
     const stateFile = join(fixture, 'antigravity-sessions.json')
     await writeFile(stateFile, JSON.stringify({
       version: 1,
@@ -159,25 +151,17 @@ rmdir '${lockDirectory}'
         }],
       },
     }), { mode: 0o600 })
-    await writeFile(executable, `#!/bin/sh
-if [ "$1" = "--version" ]; then
-  printf '1.2.3\\n'
-  exit 0
-fi
-if [ "$1" = "models" ]; then
-  printf 'claude-sonnet-4-6\\tClaude Sonnet 4.6 (Thinking)\\n'
-  exit 0
-fi
-for argument in "$@"; do
-  if [ "$argument" = "--effort" ]; then
-    printf '%s\\n' '{"event":"result","result":{"status":"ERROR","error":"effort is unsupported"}}'
-    exit 1
-  fi
-done
-printf '%s\\n' '{"event":"init","conversation_id":"conversation-existing"}'
-printf '%s\\n' '{"event":"result","result":{"status":"SUCCESS","response":"Claude response."}}'
-`, { mode: 0o700 })
-    await chmod(executable, 0o700)
+    const executable = await writeNodeCliFixture(fixture, 'agy', String.raw`
+const args = process.argv.slice(2)
+const emit = value => process.stdout.write(JSON.stringify(value) + '\n')
+if (args[0] === '--version') process.stdout.write('1.2.3\n')
+else if (args[0] === 'models') process.stdout.write('claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)\n')
+else if (args.includes('--effort')) { emit({ event: 'result', result: { status: 'ERROR', error: 'effort is unsupported' } }); process.exit(1) }
+else {
+  emit({ event: 'init', conversation_id: 'conversation-existing' })
+  emit({ event: 'result', result: { status: 'SUCCESS', response: 'Claude response.' } })
+}
+`)
     process.env['DEEPSEEK_HARNESS_ANTIGRAVITY_BIN'] = executable
 
     let completeTurn: (() => void) | undefined
@@ -216,21 +200,14 @@ printf '%s\\n' '{"event":"result","result":{"status":"SUCCESS","response":"Claud
   it('surfaces a pre-initialization result error without creating an empty turn', async () => {
     const fixture = await mkdtemp(join(tmpdir(), 'dsh-antigravity-pre-init-error-'))
     temporaryDirectories.push(fixture)
-    const executable = join(fixture, 'agy')
     const stateFile = join(fixture, 'antigravity-sessions.json')
-    await writeFile(executable, `#!/bin/sh
-if [ "$1" = "--version" ]; then
-  printf '1.2.3\\n'
-  exit 0
-fi
-if [ "$1" = "models" ]; then
-  printf 'gemini-test-high\\tGemini Test (High)\\n'
-  exit 0
-fi
-printf '%s\\n' '{"event":"result","result":{"status":"ERROR","error":"fixture pre-init failure"}}'
-exit 1
-`, { mode: 0o700 })
-    await chmod(executable, 0o700)
+    const executable = await writeNodeCliFixture(fixture, 'agy', String.raw`
+const args = process.argv.slice(2)
+const emit = value => process.stdout.write(JSON.stringify(value) + '\n')
+if (args[0] === '--version') process.stdout.write('1.2.3\n')
+else if (args[0] === 'models') process.stdout.write('gemini-test-high\tGemini Test (High)\n')
+else { emit({ event: 'result', result: { status: 'ERROR', error: 'fixture pre-init failure' } }); process.exit(1) }
+`)
     process.env['DEEPSEEK_HARNESS_ANTIGRAVITY_BIN'] = executable
 
     const events: AntigravityEvent[] = []

@@ -1,9 +1,10 @@
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { CodexEvent } from '../src/lib/types.ts'
 import { CodexAppServer } from './codex-app-server.ts'
+import { writeNodeCliFixture } from './test-cli-fixture.ts'
 
 const previousExecutable = process.env['DEEPSEEK_WORKBENCH_CODEX_BIN']
 const temporaryDirectories: string[] = []
@@ -23,11 +24,10 @@ describe('Codex App Server lifecycle', () => {
   it('publishes a failed completion when the process exits during an active turn', async () => {
     const fixture = await mkdtemp(join(tmpdir(), 'dsh-codex-app-server-'))
     temporaryDirectories.push(fixture)
-    const executable = join(fixture, 'codex-fixture')
-    await writeFile(executable, `#!/usr/bin/env node
+    const executable = await writeNodeCliFixture(fixture, 'codex-fixture', String.raw`
 const readline = require('node:readline')
 const input = readline.createInterface({ input: process.stdin })
-const send = value => process.stdout.write(JSON.stringify(value) + '\\n')
+const send = value => process.stdout.write(JSON.stringify(value) + '\n')
 input.on('line', line => {
   const message = JSON.parse(line)
   if (message.method === 'initialize') send({ id: message.id, result: {} })
@@ -42,8 +42,7 @@ input.on('line', line => {
     setTimeout(() => process.exit(17), 30)
   }
 })
-`, { mode: 0o700 })
-    await chmod(executable, 0o700)
+`)
     process.env['DEEPSEEK_WORKBENCH_CODEX_BIN'] = executable
 
     const events: CodexEvent[] = []
